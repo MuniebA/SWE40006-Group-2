@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+
+{% block title %}Home - Student Registration System{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-10">
+        <!-- Hero Section -->
+        <div class="jumbotron py-5 mb-4 bg-light rounded-3">
+            <div class="container-fluid py-4">
+                <h1 class="display-5 fw-bold">Student Registration System</h1>
+                <p class="col-md-8 fs-4">A complete solution for managing student registrations, classes, and schedules.</p>
+                
+                {% if not current_user.is_authenticated %}
+                <div class="d-grid gap-2 d-md-flex justify-content-md-start">
+                    <a href="{{ url_for('auth.login') }}" class="btn btn-primary btn-lg me-md-2">Login</a>
+                    <a href="{{ url_for('auth.register') }}" class="btn btn-outline-primary btn-lg">Register</a>
+                </div>
+                {% else %}
+                    {% if current_user.is_admin() %}
+                    <a href="{{ url_for('admin.dashboard') }}" class="btn btn-primary btn-lg">Go to Dashboard</a>
+                    {% else %}
+                    <a href="{{ url_for('student.dashboard') }}" class="btn btn-primary btn-lg">Go to Dashboard</a>
+                    {% endif %}
+                {% endif %}
+            </div>
+        </div>
+        
+        <!-- Features Section -->
+        <div class="row g-4 py-5">
+            <div class="col-md-4">
+                <div class="card h-100">
+                    <div class="card-body text-center">
+                        <div class="feature-icon bg-primary bg-gradient text-white rounded-circle mb-3">
+                            <i class="fas fa-user-graduate fa-2x p-3"></i>
+                        </div>
+                        <h3 class="card-title">Student Registration</h3>
+                        <p class="card-text">Register for classes with an easy-to-use interface. Get real-time status updates on your registrations.</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card h-100">
+                    <div class="card-body text-center">
+                        <div class="feature-icon bg-primary bg-gradient text-white rounded-circle mb-3">
+                            <i class="fas fa-calendar-alt fa-2x p-3"></i>
+                        </div>
+                        <h3 class="card-title">Class Management</h3>
+                        <p class="card-text">View and manage class schedules, teachers, and availability. Never miss a class with our scheduling system.</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card h-100">
+                    <div class="card-body text-center">
+                        <div class="feature-icon bg-primary bg-gradient text-white rounded-circle mb-3">
+                            <i class="fas fa-clipboard-check fa-2x p-3"></i>
+                        </div>
+                        <h3 class="card-title">Admin Approval</h3>
+                        <p class="card-text">Administrators can easily manage student registrations, approve or deny requests, and update class information.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- How It Works Section -->
+        <div class="card mt-4">
+            <div class="card-header bg-primary text-white">
+                <h4 class="mb-0">How It Works</h4>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6 mb-3 mb-md-0">
+                        <h5>For Students</h5>
+                        <ol class="list-group list-group-numbered">
+                            <li class="list-group-item">Create an account and complete your profile</li>
+                            <li class="list-group-item">Browse available classes by day and time</li>
+                            <li class="list-group-item">Submit registration requests for desired classes</li>
+                            <li class="list-group-item">Wait for admin approval</li>
+                            <li class="list-group-item">Attend your approved classes!</li>
+                        </ol>
+                    </div>
+                    <div class="col-md-6">
+                        <h5>For Administrators</h5>
+                        <ol class="list-group list-group-numbered">
+                            <li class="list-group-item">Manage class schedules and information</li>
+                            <li class="list-group-item">Review and approve student registration requests</li>
+                            <li class="list-group-item">Monitor class enrollment and attendance</li>
+                            <li class="list-group-item">Manage system settings and fees</li>
+                            <li class="list-group-item">Generate reports and analytics</li>
+                        </ol>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

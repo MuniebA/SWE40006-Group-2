@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+
+{% block title %}Registration Management - Student Registration System{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-md-8">
+        <h2>
+            <i class="fas fa-clipboard-list me-2"></i>Registration Management
+        </h2>
+    </div>
+    <div class="col-md-4">
+        <div class="btn-group w-100">
+            <a href="{{ url_for('admin.registration_list', status='all') }}" class="btn btn-outline-secondary {{ 'active' if current_status == 'all' }}">All</a>
+            <a href="{{ url_for('admin.registration_list', status='pending') }}" class="btn btn-outline-warning {{ 'active' if current_status == 'pending' }}">Pending</a>
+            <a href="{{ url_for('admin.registration_list', status='approved') }}" class="btn btn-outline-success {{ 'active' if current_status == 'approved' }}">Approved</a>
+            <a href="{{ url_for('admin.registration_list', status='rejected') }}" class="btn btn-outline-danger {{ 'active' if current_status == 'rejected' }}">Rejected</a>
+        </div>
+    </div>
+</div>
+
+{% if registrations %}
+    <div class="card">
+        <div class="card-header bg-primary text-white">
+            <h5 class="mb-0">
+                {% if current_status == 'pending' %}
+                    Pending Registrations
+                {% elif current_status == 'approved' %}
+                    Approved Registrations
+                {% elif current_status == 'rejected' %}
+                    Rejected Registrations
+                {% else %}
+                    All Registrations
+                {% endif %}
+            </h5>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-hover align-middle">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Student</th>
+                            <th>Class</th>
+                            <th>Month</th>
+                            <th>Fee</th>
+                            <th>Status</th>
+                            <th>Created</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for reg in registrations %}
+                            <tr>
+                                <td>{{ reg.id }}</td>
+                                <td>
+                                    <a href="{{ url_for('admin.student_detail', student_id=reg.student.id) }}">
+                                        {{ reg.student.name }}
+                                    </a>
+                                </td>
+                                <td>{{ reg.class_obj.day_of_week|capitalize }} (Class {{ reg.class_obj.class_no }})</td>
+                                <td>{{ reg.month_name }}</td>
+                                <td>${{ reg.fee }}</td>
+                                <td>
+                                    {% if reg.status == 'pending' %}
+                                        <span class="badge bg-warning text-dark">Pending</span>
+                                    {% elif reg.status == 'approved' %}
+                                        <span class="badge bg-success">Approved</span>
+                                    {% else %}
+                                        <span class="badge bg-danger">Rejected</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ reg.created_at.strftime('%Y-%m-%d') }}</td>
+                                <td>
+                                    {% if reg.status == 'pending' %}
+                                        <div class="btn-group">
+                                            <form action="{{ url_for('admin.approve_registration', registration_id=reg.id) }}" method="POST" class="d-inline">
+                                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                <button type="submit" class="btn btn-sm btn-success me-1">
+                                                    <i class="fas fa-check"></i> Approve
+                                                </button>
+                                            </form>
+                                            <form action="{{ url_for('admin.reject_registration', registration_id=reg.id) }}" method="POST" class="d-inline">
+                                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                <button type="submit" class="btn btn-sm btn-danger">
+                                                    <i class="fas fa-times"></i> Reject
+                                                </button>
+                                            </form>
+                                        </div>
+                                    {% else %}
+                                        <span class="text-muted">No actions</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+{% else %}
+    <div class="alert alert-info">
+        <i class="fas fa-info-circle me-2"></i>
+        {% if current_status == 'pending' %}
+            No pending registrations found.
+        {% elif current_status == 'approved' %}
+            No approved registrations found.
+        {% elif current_status == 'rejected' %}
+            No rejected registrations found.
+        {% else %}
+            No registrations found.
+        {% endif %}
+    </div>
+{% endif %}
+{% endblock %}

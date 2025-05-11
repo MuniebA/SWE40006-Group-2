@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+
+{% block title %}Available Classes - Student Registration System{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-md-8">
+        <h2>
+            <i class="fas fa-calendar-alt me-2"></i>Available Classes
+        </h2>
+    </div>
+    <div class="col-md-4">
+        <div class="form-group">
+            <select id="day-filter" class="form-select">
+                <option value="all">All Days</option>
+                {% for day, index in days_order.items() %}
+                    {% if day in classes_by_day %}
+                        <option value="{{ day }}">{{ day|capitalize }}</option>
+                    {% endif %}
+                {% endfor %}
+            </select>
+        </div>
+    </div>
+</div>
+
+{% for day, day_index in days_order.items() %}
+    {% if day in classes_by_day %}
+        <div class="card mb-4 class-day-section" data-day="{{ day }}">
+            <div class="card-header bg-primary text-white">
+                <h5 class="mb-0">{{ day|capitalize }}</h5>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead>
+                            <tr>
+                                <th>Class No.</th>
+                                <th>Time</th>
+                                <th>Teacher</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for class_obj in classes_by_day[day] %}
+                                <tr class="class-row" data-day="{{ day }}">
+                                    <td>{{ class_obj.class_no }}</td>
+                                    <td>{{ class_obj.time_display }}</td>
+                                    <td>{{ class_obj.teacher }}</td>
+                                    <td>
+                                        {% if class_obj.id in registered_class_ids %}
+                                            <span class="badge bg-success">Already Registered</span>
+                                        {% else %}
+                                            <a href="{{ url_for('student.register_for_class') }}?class_id={{ class_obj.id }}" class="btn btn-sm btn-primary">
+                                                <i class="fas fa-clipboard-list me-1"></i>Register
+                                            </a>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    {% endif %}
+{% endfor %}
+
+{% if not classes_by_day %}
+    <div class="alert alert-info">
+        <i class="fas fa-info-circle me-2"></i>No classes are currently available.
+    </div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const dayFilter = document.getElementById('day-filter');
+        if (dayFilter) {
+            dayFilter.addEventListener('change', function() {
+                const selectedDay = this.value;
+                const classDaySections = document.querySelectorAll('.class-day-section');
+                
+                classDaySections.forEach(section => {
+                    if (selectedDay === 'all' || section.dataset.day === selectedDay) {
+                        section.style.display = '';
+                    } else {
+                        section.style.display = 'none';
+                    }
+                });
+            });
+        }
+    });
+</script>
+{% endblock %}

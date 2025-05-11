@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+
+{% block title %}My Classes - Student Registration System{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-12">
+        <h2 class="mb-4">
+            <i class="fas fa-graduation-cap me-2"></i>My Classes
+        </h2>
+    </div>
+</div>
+
+<!-- Approved Registrations -->
+<div class="card mb-4">
+    <div class="card-header bg-success text-white">
+        <h5 class="mb-0">Approved Classes</h5>
+    </div>
+    <div class="card-body">
+        {% if approved_registrations %}
+            <div class="table-responsive">
+                <table class="table table-striped table-hover align-middle">
+                    <thead>
+                        <tr>
+                            <th>Day</th>
+                            <th>Class No.</th>
+                            <th>Time</th>
+                            <th>Teacher</th>
+                            <th>Month</th>
+                            <th>Fee</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for registration in approved_registrations %}
+                            <tr>
+                                <td>{{ registration.class_obj.day_of_week|capitalize }}</td>
+                                <td>{{ registration.class_obj.class_no }}</td>
+                                <td>{{ registration.class_obj.time_display }}</td>
+                                <td>{{ registration.class_obj.teacher }}</td>
+                                <td>{{ registration.month_name }}</td>
+                                <td>${{ registration.fee }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <div class="alert alert-info">
+                <i class="fas fa-info-circle me-2"></i>You don't have any approved classes yet.
+                <a href="{{ url_for('student.register_for_class') }}" class="alert-link">Register for a class</a> to get started!
+            </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Pending Registrations -->
+<div class="card mb-4">
+    <div class="card-header bg-warning text-dark">
+        <h5 class="mb-0">Pending Registrations</h5>
+    </div>
+    <div class="card-body">
+        {% if pending_registrations %}
+            <div class="table-responsive">
+                <table class="table table-striped table-hover align-middle">
+                    <thead>
+                        <tr>
+                            <th>Day</th>
+                            <th>Class No.</th>
+                            <th>Time</th>
+                            <th>Teacher</th>
+                            <th>Month</th>
+                            <th>Fee</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for registration in pending_registrations %}
+                            <tr>
+                                <td>{{ registration.class_obj.day_of_week|capitalize }}</td>
+                                <td>{{ registration.class_obj.class_no }}</td>
+                                <td>{{ registration.class_obj.time_display }}</td>
+                                <td>{{ registration.class_obj.teacher }}</td>
+                                <td>{{ registration.month_name }}</td>
+                                <td>${{ registration.fee }}</td>
+                                <td>
+                                    <form action="{{ url_for('student.cancel_registration', registration_id=registration.id) }}" method="POST">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Are you sure you want to cancel this registration request?')">
+                                            <i class="fas fa-times"></i> Cancel
+                                        </button>
+                                    </form>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <div class="alert alert-info">
+                <i class="fas fa-info-circle me-2"></i>You don't have any pending registration requests.
+            </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Rejected Registrations -->
+<div class="card mb-4">
+    <div class="card-header bg-danger text-white">
+        <h5 class="mb-0">Rejected Registrations</h5>
+    </div>
+    <div class="card-body">
+        {% if rejected_registrations %}
+            <div class="table-responsive">
+                <table class="table table-striped table-hover align-middle">
+                    <thead>
+                        <tr>
+                            <th>Day</th>
+                            <th>Class No.</th>
+                            <th>Time</th>
+                            <th>Teacher</th>
+                            <th>Month</th>
+                            <th>Fee</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for registration in rejected_registrations %}
+                            <tr>
+                                <td>{{ registration.class_obj.day_of_week|capitalize }}</td>
+                                <td>{{ registration.class_obj.class_no }}</td>
+                                <td>{{ registration.class_obj.time_display }}</td>
+                                <td>{{ registration.class_obj.teacher }}</td>
+                                <td>{{ registration.month_name }}</td>
+                                <td>${{ registration.fee }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <div class="alert alert-info">
+                <i class="fas fa-info-circle me-2"></i>You don't have any rejected registrations.
+            </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

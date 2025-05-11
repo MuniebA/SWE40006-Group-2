@@ -1,0 +1,177 @@
+{% extends "base.html" %}
+
+{% block title %}{{ student.name }} - Student Details{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-12">
+        <nav aria-label="breadcrumb">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item"><a href="{{ url_for('admin.dashboard') }}">Dashboard</a></li>
+                <li class="breadcrumb-item"><a href="{{ url_for('admin.student_list') }}">Students</a></li>
+                <li class="breadcrumb-item active" aria-current="page">{{ student.name }}</li>
+            </ol>
+        </nav>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-4 mb-4">
+        <div class="card h-100">
+            <div class="card-header bg-primary text-white">
+                <h5 class="mb-0">Student Information</h5>
+            </div>
+            <div class="card-body">
+                <div class="text-center mb-3">
+                    <div class="avatar-circle mx-auto bg-primary">
+                        <span class="initials text-white">{{ student.name[0] | upper }}</span>
+                    </div>
+                </div>
+                <table class="table">
+                    <tr>
+                        <th>ID:</th>
+                        <td>{{ student.id }}</td>
+                    </tr>
+                    <tr>
+                        <th>Name:</th>
+                        <td>{{ student.name }}</td>
+                    </tr>
+                    <tr>
+                        <th>Age:</th>
+                        <td>{{ student.age }}</td>
+                    </tr>
+                    <tr>
+                        <th>Contact:</th>
+                        <td>{{ student.contact }}</td>
+                    </tr>
+                    <tr>
+                        <th>User Account:</th>
+                        <td>{{ student.user.username }}</td>
+                    </tr>
+                    <tr>
+                        <th>Email:</th>
+                        <td>{{ student.user.email }}</td>
+                    </tr>
+                </table>
+                <div class="d-grid gap-2 mt-3">
+                    <button type="button" class="btn btn-danger" data-bs-toggle="modal" data-bs-target="#deleteModal">
+                        <i class="fas fa-trash me-1"></i>Delete Student
+                    </button>
+                </div>
+                
+                <!-- Delete Modal -->
+                <div class="modal fade" id="deleteModal" tabindex="-1" aria-labelledby="deleteModalLabel" aria-hidden="true">
+                    <div class="modal-dialog">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title" id="deleteModalLabel">Confirm Deletion</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                            </div>
+                            <div class="modal-body">
+                                <p>Are you sure you want to delete {{ student.name }}?</p>
+                                <p class="text-danger">This action cannot be undone. All registration records for this student will also be deleted.</p>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                <form action="{{ url_for('admin.delete_student', student_id=student.id) }}" method="POST">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button type="submit" class="btn btn-danger">Delete</button>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-8 mb-4">
+        <div class="card h-100">
+            <div class="card-header bg-primary text-white">
+                <h5 class="mb-0">Class Registrations</h5>
+            </div>
+            <div class="card-body">
+                {% if registrations %}
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle">
+                            <thead>
+                                <tr>
+                                    <th>Day</th>
+                                    <th>Class No.</th>
+                                    <th>Time</th>
+                                    <th>Teacher</th>
+                                    <th>Month</th>
+                                    <th>Fee</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for registration in registrations %}
+                                    <tr>
+                                        <td>{{ registration.class_obj.day_of_week|capitalize }}</td>
+                                        <td>{{ registration.class_obj.class_no }}</td>
+                                        <td>{{ registration.class_obj.time_display }}</td>
+                                        <td>{{ registration.class_obj.teacher }}</td>
+                                        <td>{{ registration.month_name }}</td>
+                                        <td>${{ registration.fee }}</td>
+                                        <td>
+                                            {% if registration.status == 'pending' %}
+                                                <div class="btn-group btn-group-sm">
+                                                    <form action="{{ url_for('admin.approve_registration', registration_id=registration.id) }}" method="POST" class="d-inline">
+                                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                        <button type="submit" class="btn btn-success btn-sm me-1">
+                                                            <i class="fas fa-check"></i>
+                                                        </button>
+                                                    </form>
+                                                    <form action="{{ url_for('admin.reject_registration', registration_id=registration.id) }}" method="POST" class="d-inline">
+                                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                        <button type="submit" class="btn btn-danger btn-sm">
+                                                            <i class="fas fa-times"></i>
+                                                        </button>
+                                                    </form>
+                                                </div>
+                                            {% elif registration.status == 'approved' %}
+                                                <span class="badge bg-success">Approved</span>
+                                            {% else %}
+                                                <span class="badge bg-danger">Rejected</span>
+                                            {% endif %}
+                                        </td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% else %}
+                    <div class="alert alert-info mb-0">
+                        <i class="fas fa-info-circle me-2"></i>This student hasn't registered for any classes yet.
+                    </div>
+                {% endif %}
+            </div>
+            <div class="card-footer bg-light">
+                <div class="d-flex justify-content-between align-items-center">
+                    <span><strong>Total Registrations:</strong> {{ registrations|length }}</span>
+                    <span><strong>Total Fees:</strong> ${{ registrations|sum(attribute='fee') if registrations else 0 }}</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    .avatar-circle {
+        width: 100px;
+        height: 100px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    .initials {
+        font-size: 42px;
+        font-weight: bold;
+    }
+</style>
+{% endblock %}

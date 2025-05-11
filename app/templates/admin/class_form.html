@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }} - Student Registration System{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-12">
+        <nav aria-label="breadcrumb">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item"><a href="{{ url_for('admin.dashboard') }}">Dashboard</a></li>
+                <li class="breadcrumb-item"><a href="{{ url_for('admin.class_list') }}">Classes</a></li>
+                <li class="breadcrumb-item active" aria-current="page">{{ title }}</li>
+            </ol>
+        </nav>
+    </div>
+</div>
+
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header bg-primary text-white">
+                <h4 class="mb-0">{{ title }}</h4>
+            </div>
+            <div class="card-body">
+                <form method="POST" action="">
+                    {{ form.csrf_token }}
+                    
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            {{ form.class_no.label(class="form-label") }}
+                            {{ form.class_no(class="form-control" + (" is-invalid" if form.class_no.errors else "")) }}
+                            {% if form.class_no.errors %}
+                                <div class="invalid-feedback">
+                                    {% for error in form.class_no.errors %}
+                                        {{ error }}
+                                    {% endfor %}
+                                </div>
+                            {% endif %}
+                        </div>
+                        <div class="col-md-6">
+                            {{ form.day_of_week.label(class="form-label") }}
+                            {{ form.day_of_week(class="form-select" + (" is-invalid" if form.day_of_week.errors else "")) }}
+                            {% if form.day_of_week.errors %}
+                                <div class="invalid-feedback">
+                                    {% for error in form.day_of_week.errors %}
+                                        {{ error }}
+                                    {% endfor %}
+                                </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                    
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            {{ form.start_time.label(class="form-label") }}
+                            {{ form.start_time(class="form-control" + (" is-invalid" if form.start_time.errors else ""), type="time") }}
+                            {% if form.start_time.errors %}
+                                <div class="invalid-feedback">
+                                    {% for error in form.start_time.errors %}
+                                        {{ error }}
+                                    {% endfor %}
+                                </div>
+                            {% endif %}
+                        </div>
+                        <div class="col-md-6">
+                            {{ form.end_time.label(class="form-label") }}
+                            {{ form.end_time(class="form-control" + (" is-invalid" if form.end_time.errors else ""), type="time") }}
+                            {% if form.end_time.errors %}
+                                <div class="invalid-feedback">
+                                    {% for error in form.end_time.errors %}
+                                        {{ error }}
+                                    {% endfor %}
+                                </div>
+                            {% endif %}
+                        </div>
+                        <div id="time-error" class="text-danger mt-1" style="display: none;"></div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        {{ form.teacher.label(class="form-label") }}
+                        {{ form.teacher(class="form-control" + (" is-invalid" if form.teacher.errors else "")) }}
+                        {% if form.teacher.errors %}
+                            <div class="invalid-feedback">
+                                {% for error in form.teacher.errors %}
+                                    {{ error }}
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+                    </div>
+                    
+                    <div class="d-flex justify-content-between">
+                        <a href="{{ url_for('admin.class_list') }}" class="btn btn-secondary">Cancel</a>
+                        {{ form.submit(class="btn btn-primary") }}
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

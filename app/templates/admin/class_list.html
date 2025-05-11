@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+
+{% block title %}Class Management - Student Registration System{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-md-6">
+        <h2>
+            <i class="fas fa-chalkboard-teacher me-2"></i>Class Management
+        </h2>
+    </div>
+    <div class="col-md-6 text-md-end">
+        <a href="{{ url_for('admin.add_class') }}" class="btn btn-primary">
+            <i class="fas fa-plus-circle me-1"></i>Add New Class
+        </a>
+    </div>
+</div>
+
+{% for day, day_index in days_order.items() %}
+    {% if day in classes_by_day %}
+        <div class="card mb-4">
+            <div class="card-header bg-primary text-white">
+                <h5 class="mb-0">{{ day|capitalize }}</h5>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead>
+                            <tr>
+                                <th>Class No.</th>
+                                <th>Time</th>
+                                <th>Teacher</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for class_obj in classes_by_day[day] %}
+                                <tr>
+                                    <td>{{ class_obj.class_no }}</td>
+                                    <td>{{ class_obj.time_display }}</td>
+                                    <td>{{ class_obj.teacher }}</td>
+                                    <td>
+                                        <div class="btn-group">
+                                            <a href="{{ url_for('admin.edit_class', class_id=class_obj.id) }}" class="btn btn-sm btn-outline-primary">
+                                                <i class="fas fa-edit"></i> Edit
+                                            </a>
+                                            <button type="button" class="btn btn-sm btn-outline-danger" data-bs-toggle="modal" data-bs-target="#deleteModal{{ class_obj.id }}">
+                                                <i class="fas fa-trash"></i> Delete
+                                            </button>
+                                        </div>
+                                        
+                                        <!-- Delete Modal -->
+                                        <div class="modal fade" id="deleteModal{{ class_obj.id }}" tabindex="-1" aria-labelledby="deleteModalLabel{{ class_obj.id }}" aria-hidden="true">
+                                            <div class="modal-dialog">
+                                                <div class="modal-content">
+                                                    <div class="modal-header">
+                                                        <h5 class="modal-title" id="deleteModalLabel{{ class_obj.id }}">Confirm Deletion</h5>
+                                                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                                                    </div>
+                                                    <div class="modal-body">
+                                                        <p>Are you sure you want to delete Class {{ class_obj.class_no }} on {{ day|capitalize }}?</p>
+                                                        <p class="text-danger">This action cannot be undone. All student registrations for this class will also be removed.</p>
+                                                    </div>
+                                                    <div class="modal-footer">
+                                                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                                        <form action="{{ url_for('admin.delete_class', class_id=class_obj.id) }}" method="POST">
+                                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                            <button type="submit" class="btn btn-danger">Delete</button>
+                                                        </form>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    {% endif %}
+{% endfor %}
+
+{% if not classes_by_day %}
+    <div class="alert alert-info">
+        <i class="fas fa-info-circle me-2"></i>No classes have been created yet. 
+        <a href="{{ url_for('admin.add_class') }}" class="alert-link">Add your first class</a>.
+    </div>
+{% endif %}
+{% endblock %}

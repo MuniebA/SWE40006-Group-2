@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+
+{% block title %}Complete Profile - Student Registration System{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header bg-primary text-white">
+                <h4 class="mb-0">Complete Your Profile</h4>
+            </div>
+            <div class="card-body">
+                <div class="alert alert-info">
+                    <i class="fas fa-info-circle me-2"></i>We need a few more details to complete your registration.
+                </div>
+                
+                <form method="POST" action="{{ url_for('auth.complete_profile') }}">
+                    {{ form.csrf_token }}
+                    
+                    <div class="mb-3">
+                        {{ form.name.label(class="form-label") }}
+                        {{ form.name(class="form-control" + (" is-invalid" if form.name.errors else ""), placeholder="Enter your full name") }}
+                        {% if form.name.errors %}
+                            <div class="invalid-feedback">
+                                {% for error in form.name.errors %}
+                                    {{ error }}
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+                    </div>
+                    
+                    <div class="mb-3">
+                        {{ form.age.label(class="form-label") }}
+                        {{ form.age(class="form-control" + (" is-invalid" if form.age.errors else ""), placeholder="Your age") }}
+                        {% if form.age.errors %}
+                            <div class="invalid-feedback">
+                                {% for error in form.age.errors %}
+                                    {{ error }}
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+                    </div>
+                    
+                    <div class="mb-3">
+                        {{ form.contact.label(class="form-label") }}
+                        {{ form.contact(class="form-control" + (" is-invalid" if form.contact.errors else ""), placeholder="0XXXXXXXXX", oninput="validatePhone(this)") }}
+                        <div id="phone-error" class="invalid-feedback" style="display: none;"></div>
+                        {% if form.contact.errors %}
+                            <div class="invalid-feedback">
+                                {% for error in form.contact.errors %}
+                                    {{ error }}
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+                        <div class="form-text">Please enter a 10-digit phone number starting with 0.</div>
+                    </div>
+                    
+                    <div class="d-grid mt-4">
+                        {{ form.submit(class="btn btn-primary") }}
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
