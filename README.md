@@ -144,7 +144,7 @@ CREATE TABLE IF NOT EXISTS settings (
 
 -- Create default admin account (password: admin123)
 INSERT INTO users (username, email, password_hash, role)
-VALUES ('admin', 'admin@example.com', 'pbkdf2:sha256:260000$xrKAZvQxJcg14X7H$4994b05e1f2f94c71791005c5ca9e8492e07af994a01d916fe1a42fa11915fea', 'admin');
+VALUES ('admin', 'admin@example.com', 'pbkdf2:sha256:260000$JuTOg6ds6yhgryUg$10449b20eaf7bb02959311d54ad839cca2049412783716afd7a88e2d86941cde', 'admin');
 
 -- Initialize settings
 INSERT INTO settings (year, fee_per_session)
