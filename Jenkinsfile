@@ -5,8 +5,6 @@ pipeline {
         VENV_DIR = 'venv'
         FLASK_APP = 'run.py'
         FLASK_ENV = 'testing'
-        // Use withCredentials instead of directly referencing credentials
-        // DB_PASSWORD = credentials('db-password')
     }
 
     stages {
@@ -49,23 +47,16 @@ pipeline {
     
     post {
         always {
-            // Wrap all post actions in a node block
-            node {
-                echo 'Cleaning up workspace...'
-                cleanWs()
-            }
+            echo 'Cleaning up workspace...'
+            cleanWs()
         }
         
         success {
-            node {
-                echo 'Build completed successfully!'
-            }
+            echo 'Build completed successfully!'
         }
         
         failure {
-            node {
-                echo 'Build failed! Check the logs for details.'
-            }
+            echo 'Build failed! Check the logs for details.'
         }
     }
 }
