@@ -10,19 +10,17 @@ pipeline {
     stages {
         stage('Clone Repo') {
             steps {
-                // This already happens automatically when using 'Pipeline script from SCM'
                 echo 'Repository cloned automatically'
             }
         }
 
         stage('Setup Python Environment') {
             steps {
-                sh 'python3 -m venv $VENV_DIR || python -m venv $VENV_DIR'
                 sh '''
-                    source $VENV_DIR/bin/activate || $VENV_DIR/Scripts/activate 
-                    pip install --upgrade pip
-                    pip install -r requirements.txt
-                    pip install pytest pytest-cov
+                    python3 -m venv venv
+                    ./venv/bin/pip install --upgrade pip
+                    ./venv/bin/pip install -r requirements.txt
+                    ./venv/bin/pip install pytest pytest-cov
                 '''
             }
         }
@@ -30,11 +28,8 @@ pipeline {
         stage('Run Tests') {
             steps {
                 echo 'Running tests...'
-                // We'll enable this after adding tests
-                // sh '''
-                //     source $VENV_DIR/bin/activate || $VENV_DIR/Scripts/activate 
-                //     python -m pytest tests/
-                // '''
+                // Uncomment and add actual tests folder later
+                // sh './venv/bin/python -m pytest tests/'
             }
         }
 
@@ -44,17 +39,17 @@ pipeline {
             }
         }
     }
-    
+
     post {
         always {
             echo 'Cleaning up workspace...'
             cleanWs()
         }
-        
+
         success {
             echo 'Build completed successfully!'
         }
-        
+
         failure {
             echo 'Build failed! Check the logs for details.'
         }
