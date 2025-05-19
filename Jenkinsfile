@@ -24,7 +24,7 @@ pipeline {
                     # Create virtual environment
                     python3 -m venv $VENV_DIR
                     
-                    # Activate using . instead of source (compatible with all shells)
+                    # Activate virtual environment
                     . $VENV_DIR/bin/activate
                     
                     # Install dependencies
@@ -41,42 +41,20 @@ pipeline {
                     # Activate virtual environment
                     . $VENV_DIR/bin/activate
                     
-                    # Echo database-related environment variables for debugging
-                    echo "DATABASE_URL: $DATABASE_URL"
-                    echo "TEST_DATABASE_URL: $TEST_DATABASE_URL"
-                    
-                    # Test MySQL connectivity first
+                    # Test MySQL connectivity
                     echo "Testing MySQL connection..."
                     if ! mysql -u jenkins -ppassword -e "SELECT 1"; then
                         echo "ERROR: Cannot connect to MySQL server!"
                         exit 1
                     fi
                     
-                    # Create test database with verbose output
-                    echo "Dropping database if it exists..."
+                    # Create test database
+                    echo "Preparing test database..."
                     mysql -u jenkins -ppassword -e "DROP DATABASE IF EXISTS student_registration_test;"
-                    
-                    echo "Creating test database..."
                     mysql -u jenkins -ppassword -e "CREATE DATABASE student_registration_test;"
                     
-                    # Verify database was created
-                    echo "Verifying database creation..."
-                    if ! mysql -u jenkins -ppassword -e "SHOW DATABASES LIKE 'student_registration_test';" | grep student_registration_test; then
-                        echo "ERROR: Failed to create database!"
-                        exit 1
-                    fi
-                    
-                    # Initialize schema with verbose output
-                    echo "Initializing database schema..."
+                    # Initialize schema
                     mysql -u jenkins -ppassword student_registration_test < init.sql
-                    
-                    # Verify tables were created
-                    echo "Verifying schema initialization..."
-                    TABLE_COUNT=$(mysql -u jenkins -ppassword -e "SHOW TABLES FROM student_registration_test;" | wc -l)
-                    if [ "$TABLE_COUNT" -lt "2" ]; then
-                        echo "ERROR: Failed to initialize database schema! Only $TABLE_COUNT tables found."
-                        exit 1
-                    fi
                     
                     echo "Database setup completed successfully!"
                 '''
@@ -85,28 +63,12 @@ pipeline {
 
         stage('Run Basic Tests') {
             steps {
-                echo 'Running basic Python unit tests...'
                 sh '''#!/bin/bash
-                    # Activate using . instead of source
+                    # Activate virtual environment
                     . $VENV_DIR/bin/activate
                     
-                    # Run pytest for non-database, non-docker tests
+                    # Run non-Docker tests
                     python -m pytest tests/ -v -k "not docker and not database"
-                '''
-            }
-        }
-
-        stage('Debug Database') {
-            steps {
-                sh '''#!/bin/bash
-                    echo "MySQL Status:"
-                    service mysql status || true
-                    
-                    echo "Database List:"
-                    mysql -u jenkins -ppassword -e "SHOW DATABASES;" || true
-                    
-                    echo "Jenkins User Permissions:"
-                    mysql -u jenkins -ppassword -e "SHOW GRANTS;" || true
                 '''
             }
         }
@@ -114,10 +76,10 @@ pipeline {
         stage('Run Database Tests') {
             steps {
                 sh '''#!/bin/bash
-                    # Activate using . instead of source
+                    # Activate virtual environment
                     . $VENV_DIR/bin/activate
                     
-                    # Run pytest for database tests
+                    # Run database tests
                     python -m pytest tests/ -v -k "database"
                 '''
             }
@@ -125,15 +87,10 @@ pipeline {
 
         stage('Verify Docker') {
             steps {
-                echo 'Verifying Docker installation...'
                 sh '''
-                    # Check Docker is installed
+                    # Check Docker installation
                     docker --version
-                    
-                    # Check Docker Compose is installed
                     docker-compose --version
-                    
-                    # Verify Docker can run containers
                     docker run hello-world
                 '''
             }
@@ -141,7 +98,6 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                echo 'Building Docker image...'
                 sh '''
                     # Build the Docker image with a unique tag
                     docker build -t $DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG .
@@ -164,9 +120,6 @@ pipeline {
                         sed -i 's/"3306:3306"/"3307:3306"/g' docker-compose.yml
                     fi
                     
-                    # Ensure Flask debug is enabled in docker-compose.yml
-                    grep -q "FLASK_DEBUG" docker-compose.yml || echo "Warning: FLASK_DEBUG not set in docker-compose.yml"
-                    
                     # Bring down any existing containers
                     docker-compose down -v
                     
@@ -179,16 +132,12 @@ pipeline {
                     # Show running containers
                     docker-compose ps
                     
-                    # Inspect the logs to debug any issues
-                    echo "Checking web container logs for errors:"
-                    docker-compose logs web
-                    
-                    # Direct database connectivity test
-                    echo "Testing database connection directly from web container:"
+                    # Test database connection in container
+                    echo "Testing database connection in container:"
                     docker-compose exec -T web python -c "
 from app import create_app, db
 from sqlalchemy import text
-app = create_app('testing')  # or whatever config you use in Docker
+app = create_app('testing')
 with app.app_context():
     try:
         db.session.execute(text('SELECT 1'))
@@ -197,171 +146,13 @@ with app.app_context():
         print('❌ Database connection failed:', e)
 " || true
                     
-                    # Run the tests
+                    # Run the Docker tests
                     . venv/bin/activate && python -m pytest tests/ -v -k docker
-                    
-                    # Detailed error logs after test runs (especially if they fail)
-                    echo "Checking detailed web container logs after tests:"
-                    docker-compose logs --tail=50 web
-                    
-                    # Try to get Gunicorn error logs
-                    echo "Checking Gunicorn error logs (if available):"
-                    docker-compose exec -T web bash -c "cat /var/log/gunicorn/* 2>/dev/null || echo 'No Gunicorn logs found'" || true
-                    
-                    # Check application error logs
-                    echo "Checking application error logs (if available):"
-                    docker-compose exec -T web bash -c "cat /app/logs/app.log 2>/dev/null || echo 'No application logs found'" || true
-
-                    echo "Checking Flask application error details:"
-                    docker-compose exec -T web python -c "
-from app import create_app
-app = create_app('testing')
-with app.test_client() as client:
-    response = client.post('/register', data={
-        'username': 'test_user',
-        'email': 'test@example.com',
-        'password': 'Password123!',
-        'confirm_password': 'Password123!'
-    })
-    print(f'Status code: {response.status_code}')
-    print(f'Response data: {response.data.decode()}')
-" || true
-                    
-                    # Additional detailed error information
-                    echo "Getting detailed error information from Flask app:"
-                    docker-compose exec -T web bash -c "
-# Check Flask configuration
-echo 'Flask Config:'
-python -c 'import os; print(\"FLASK_DEBUG=\", os.environ.get(\"FLASK_DEBUG\")); print(\"FLASK_ENV=\", os.environ.get(\"FLASK_ENV\"))'
-
-# Check database configuration 
-echo 'Database Config:'
-python -c 'import os; print(\"DATABASE_URL=\", os.environ.get(\"DATABASE_URL\"))'
-
-# Test database connection directly
-echo 'Testing database connection:'
-python -c 'from app import create_app, db;
-from sqlalchemy import text;
-app = create_app(\"testing\");
-try:
-    db.session.execute(\"SELECT 1\");
-    print(\"Database connection OK\")
-except Exception as e:
-    print(\"Database error:\", e)'
-" || true
-
-                    echo "Detailed Flask route debugging:"
-                    docker-compose exec -T web python -c "
-import traceback
-from flask import Flask
-from app import create_app
-from flask_wtf.csrf import CSRFProtect
-
-# Create test app with CSRF disabled for testing
-app = create_app('testing')
-app.config['WTF_CSRF_ENABLED'] = False  # Disable CSRF for this test
-
-with app.test_client() as client:
-    with app.app_context():
-        try:
-            # Try the registration endpoint
-            print('Testing registration endpoint...')
-            response = client.post('/register', data={
-                'username': 'debug_user',
-                'email': 'debug@example.com',
-                'password': 'Debug123!',
-                'confirm_password': 'Debug123!'
-            })
-            print(f'Registration Status: {response.status_code}')
-
-            # If error, try to get error details
-            if response.status_code == 500:
-                error_text = response.data.decode('utf-8')
-                print(f'Error response: {error_text[:500]}...')  # Print first 500 chars of error
-
-                # Try to trigger the error again with app.debug=True to get traceback
-                app.config['DEBUG'] = True
-                app.testing = True
-                try:
-                    response = client.post('/register', data={
-                        'username': 'debug_user2',
-                        'email': 'debug2@example.com',
-                        'password': 'Debug123!',
-                        'confirm_password': 'Debug123!'
-                    })
-                    print(f'Debug mode response: {response.status_code}')
-                except Exception as e:
-                    print('Exception during debug mode testing:')
-                    traceback.print_exc()
-        except Exception as e:
-            print(f'Exception during testing: {e}')
-            traceback.print_exc()
-" || true
-
-                    echo "Detailed Error Debugging:"
-                    docker-compose exec -T web bash -c "
-python -c '
-import traceback
-from app import create_app, db
-from sqlalchemy import text, inspect
-from flask_wtf.csrf import CSRFProtect
-
-# Create app with CSRF disabled
-app = create_app(\"testing\")
-app.config[\"WTF_CSRF_ENABLED\"] = False
-app.config[\"DEBUG\"] = True
-
-with app.app_context():
-    try:
-        # Test database connection first
-        print(\"Database config:\", app.config[\"SQLALCHEMY_DATABASE_URI\"])
-        
-        # Check if database connection works
-        result = db.session.execute(text(\"SELECT 1\")).scalar()
-        print(\"Database connection works, result:\", result)
-        
-        # Check if all required tables exist
-        inspector = inspect(db.engine)
-        table_names = inspector.get_table_names()
-        print(\"Available database tables:\", table_names)
-        
-        # Check if users table has expected columns
-        if \"users\" in table_names:
-            columns = [col[\"name\"] for col in inspector.get_columns(\"users\")]
-            print(\"Users table columns:\", columns)
-        
-        # Now test the actual endpoints
-        with app.test_client() as client:
-            # Test registration endpoint
-            print(\"Testing registration endpoint...\")
-            response = client.post(\"/register\", data={
-                \"username\": \"test_debug_user\",
-                \"email\": \"debug@example.com\",
-                \"password\": \"Password123!\",
-                \"confirm_password\": \"Password123!\"
-            })
-            print(\"Registration status:\", response.status_code)
-            if response.status_code == 500:
-                print(\"Response data:\", response.data.decode()[0:500])
-    except Exception as e:
-        print(\"Exception:\", e)
-        traceback.print_exc()
-'
-"
                 '''
             }
             post {
                 always {
-                    sh '''
-                        echo "Shutting down Docker Compose environment..."
-                        docker-compose down -v
-                    '''
-                }
-                failure {
-                    sh '''
-                        echo "Test failed! Capturing final container logs:"
-                        docker-compose logs || true
-                    '''
+                    sh 'docker-compose down -v'
                 }
             }
         }
