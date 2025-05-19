@@ -4,6 +4,8 @@ from flask_login import LoginManager
 from flask_migrate import Migrate
 from flask_wtf.csrf import CSRFProtect
 from datetime import datetime
+import logging
+logging.basicConfig(level=logging.DEBUG)
 
 # Initialize extensions
 db = SQLAlchemy()

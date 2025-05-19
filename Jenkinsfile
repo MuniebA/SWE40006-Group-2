@@ -183,21 +183,21 @@ pipeline {
                     echo "Checking web container logs for errors:"
                     docker-compose logs web
                     
-                    # Direct database connectivity test - NEW ADDITION
+                    # Direct database connectivity test
                     echo "Testing database connection directly from web container:"
                     docker-compose exec -T web python -c "
-                    from app import db
-                    try:
-                        db.session.execute('SELECT 1')
-                        print('✅ Database connection successful')
-                    except Exception as e:
-                        print('❌ Database connection failed:', e)
-                    " || true
+from app import db
+try:
+    db.session.execute('SELECT 1')
+    print('✅ Database connection successful')
+except Exception as e:
+    print('❌ Database connection failed:', e)
+" || true
                     
                     # Run the tests
                     . venv/bin/activate && python -m pytest tests/ -v -k docker
                     
-                    # Detailed error logs after test runs (especially if they fail) - NEW ADDITION
+                    # Detailed error logs after test runs (especially if they fail)
                     echo "Checking detailed web container logs after tests:"
                     docker-compose logs --tail=50 web
                     
@@ -208,6 +208,42 @@ pipeline {
                     # Check application error logs
                     echo "Checking application error logs (if available):"
                     docker-compose exec -T web bash -c "cat /app/logs/app.log 2>/dev/null || echo 'No application logs found'" || true
+
+                    echo "Checking Flask application error details:"
+                    docker-compose exec -T web python -c "
+from app import create_app
+app = create_app('testing')
+with app.test_client() as client:
+    response = client.post('/register', data={
+        'username': 'test_user',
+        'email': 'test@example.com',
+        'password': 'Password123!',
+        'confirm_password': 'Password123!'
+    })
+    print(f'Status code: {response.status_code}')
+    print(f'Response data: {response.data.decode()}')
+" || true
+                    
+                    # Additional detailed error information
+                    echo "Getting detailed error information from Flask app:"
+                    docker-compose exec -T web bash -c "
+# Check Flask configuration
+echo 'Flask Config:'
+python -c 'import os; print(\"FLASK_DEBUG=\", os.environ.get(\"FLASK_DEBUG\")); print(\"FLASK_ENV=\", os.environ.get(\"FLASK_ENV\"))'
+
+# Check database configuration 
+echo 'Database Config:'
+python -c 'import os; print(\"DATABASE_URL=\", os.environ.get(\"DATABASE_URL\"))'
+
+# Test database connection directly
+echo 'Testing database connection:'
+python -c 'from app import db; 
+try: 
+    db.session.execute(\"SELECT 1\"); 
+    print(\"Database connection OK\") 
+except Exception as e: 
+    print(\"Database error:\", e)'
+" || true
                 '''
             }
             post {

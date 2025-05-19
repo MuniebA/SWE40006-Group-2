@@ -7,8 +7,8 @@ services:
       - FLASK_CONFIG=testing
       - FLASK_APP=run.py
       - DATABASE_URL=mysql+pymysql://testuser:testpass@db:3306/testdb
-      - FLASK_ENV=development
       - FLASK_DEBUG=1
+      - FLASK_ENV=development
     depends_on:
       db:
         condition: service_healthy  # Only start web after db is healthy
