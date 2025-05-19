@@ -26,16 +26,21 @@ class DevelopmentConfig(Config):
     DEBUG = True
 
 
+# class TestingConfig(Config):
+#     TESTING = True
+#     WTF_CSRF_ENABLED = False
+
+#     # Always use student_registration_test database for testing
+#     SQLALCHEMY_DATABASE_URI = os.environ.get('TEST_DATABASE_URL') or \
+#         'mysql+pymysql://jenkins:password@localhost/student_registration_test'
+
+#     # Print SQL queries for debugging
+#     SQLALCHEMY_ECHO = True
+
+
 class TestingConfig(Config):
     TESTING = True
-    WTF_CSRF_ENABLED = False
-
-    # Always use student_registration_test database for testing
-    SQLALCHEMY_DATABASE_URI = os.environ.get('TEST_DATABASE_URL') or \
-        'mysql+pymysql://jenkins:password@localhost/student_registration_test'
-
-    # Print SQL queries for debugging
-    SQLALCHEMY_ECHO = True
+    WTF_CSRF_ENABLED = False  # Disable CSRF for tests
 
 
 class ProductionConfig(Config):
