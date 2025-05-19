@@ -14,17 +14,21 @@ class TestClient:
     def post(self, path, data=None):
         return self.session.post(urljoin(self.base_url, path), data=data)
 
+
 def wait_for_app(url, max_retries=30, delay=2):
     """Wait for the application to become available."""
     for i in range(max_retries):
         try:
-            response = requests.get(url)
+            response = requests.get(url, timeout=5)
             if response.status_code == 200:
                 print("Application is up and running!")
                 return True
-        except requests.exceptions.ConnectionError:
-            print(f"Attempt {i+1}/{max_retries}: Waiting for application to start...")
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+            print(
+                f"Attempt {i+1}/{max_retries}: Waiting for application to start...")
             time.sleep(delay)
+
+    print("ERROR: Application failed to start after multiple attempts!")
     return False
 
 def test_public_pages():

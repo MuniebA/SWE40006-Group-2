@@ -28,8 +28,8 @@ pipeline {
 
         stage('Run Unit Tests') {
             steps {
-                echo 'Running unit tests...'
-                sh './venv/bin/python -m pytest tests/'
+                echo 'Running only Python unit tests (non-Docker tests)...'
+                sh './venv/bin/python -m pytest tests/ -k "not test_docker"'
             }
         }
 
@@ -46,14 +46,31 @@ pipeline {
                 sh 'docker-compose up -d'
                 
                 echo 'Waiting for services to start...'
-                sh 'sleep 30'  // Give services time to initialize
+                sh '''
+                    # Wait for the Flask app to become available (up to 2 minutes)
+                    MAX_RETRIES=60
+                    DELAY=2
+                    COUNTER=0
+                    
+                    until $(curl --output /dev/null --silent --head --fail http://localhost:5000) || [ $COUNTER -eq $MAX_RETRIES ]; do
+                        echo "Waiting for Flask app to start... ($COUNTER/$MAX_RETRIES)"
+                        sleep $DELAY
+                        COUNTER=$((COUNTER+1))
+                    done
+                    
+                    if [ $COUNTER -eq $MAX_RETRIES ]; then
+                        echo "Flask app failed to start within the allocated time!"
+                        docker-compose logs
+                        exit 1
+                    fi
+                    
+                    echo "Flask app is up and running!"
+                '''
                 
                 echo 'Running Docker tests...'
                 sh '''
-                    ./venv/tests/test_docker.py
-                    if [ $? -eq 0 ]; then
-                        echo "Docker tests passed!"
-                    else
+                    ./venv/bin/python tests/test_docker.py
+                    if [ $? -ne 0 ]; then
                         echo "Docker tests failed!"
                         exit 1
                     fi
