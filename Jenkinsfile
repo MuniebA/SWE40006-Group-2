@@ -16,9 +16,14 @@ pipeline {
 
         stage('Setup Python Environment') {
             steps {
-                sh '''
-                    python3 -m venv $VENV_DIR || python -m venv $VENV_DIR
-                    source $VENV_DIR/bin/activate || $VENV_DIR/Scripts/activate 
+                sh '''#!/bin/bash
+                    # Create virtual environment
+                    python3 -m venv $VENV_DIR
+                    
+                    # Activate using . instead of source (compatible with all shells)
+                    . $VENV_DIR/bin/activate
+                    
+                    # Install dependencies
                     pip install --upgrade pip
                     pip install -r requirements.txt
                     pip install pytest pytest-cov
@@ -28,7 +33,7 @@ pipeline {
 
         stage('Create Basic Test') {
             steps {
-                sh '''
+                sh '''#!/bin/bash
                     mkdir -p tests
                     if [ ! -f tests/__init__.py ]; then
                         touch tests/__init__.py
@@ -56,10 +61,37 @@ pipeline {
         stage('Run Tests') {
             steps {
                 echo 'Running only Python unit tests (non-Docker tests)...'
-                sh '''
-                    source $VENV_DIR/bin/activate || $VENV_DIR/Scripts/activate 
+                sh '''#!/bin/bash
+                    # Activate using . instead of source
+                    . $VENV_DIR/bin/activate
+                    
+                    # Run pytest
                     python -m pytest tests/ -v -k "not docker"
                 '''
+            }
+        }
+
+        stage('Setup Test Database') {
+            steps {
+                withCredentials([string(credentialsId: 'mysql-password', variable: 'MYSQL_PASSWORD')]) {
+                    sh '''#!/bin/bash
+                        # Activate virtual environment
+                        . $VENV_DIR/bin/activate
+                        
+                        # Create test database
+                        mysql -u jenkins -p"${MYSQL_PASSWORD}" -e "DROP DATABASE IF EXISTS student_registration_test;"
+                        mysql -u jenkins -p"${MYSQL_PASSWORD}" -e "CREATE DATABASE student_registration_test;"
+                        
+                        # Initialize schema
+                        mysql -u jenkins -p"${MYSQL_PASSWORD}" student_registration_test < init.sql
+                        
+                        # Set environment variable for testing
+                        export DATABASE_URL="mysql+pymysql://jenkins:${MYSQL_PASSWORD}@localhost/student_registration_test"
+                        
+                        # Run test with database connection
+                        python -m pytest tests/ -v -k "not docker and database"
+                    '''
+                }
             }
         }
 
@@ -68,12 +100,13 @@ pipeline {
                 echo '✅ Student Registration System built successfully!'
             }
         }
+
     }
     
     post {
         always {
             echo 'Cleaning up workspace...'
-            // cleanWs()  // Uncommented to preserve workspace for debugging
+            // cleanWs()
         }
         
         success {
