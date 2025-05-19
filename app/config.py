@@ -30,6 +30,9 @@ class DevelopmentConfig(Config):
 class TestingConfig(Config):
     TESTING = True
     WTF_CSRF_ENABLED = False
+    # Use a separate test database
+    SQLALCHEMY_DATABASE_URI = os.environ.get('TEST_DATABASE_URL') or \
+        'mysql+pymysql://jenkins:password@localhost/student_registration_test'
 
 
 class ProductionConfig(Config):

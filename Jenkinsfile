@@ -4,7 +4,9 @@ pipeline {
     environment {
         VENV_DIR = 'venv'
         FLASK_APP = 'run.py'
-        FLASK_ENV = 'testing'
+        FLASK_DEBUG = 'true'
+        DATABASE_URL = 'mysql+pymysql://jenkins:password@localhost/student_registration'
+        TEST_DATABASE_URL = 'mysql+pymysql://jenkins:password@localhost/student_registration_test'
     }
 
     stages {
@@ -31,81 +33,62 @@ pipeline {
             }
         }
 
-        stage('Create Basic Test') {
+        stage('Setup Test Database') {
             steps {
                 sh '''#!/bin/bash
-                    mkdir -p tests
-                    if [ ! -f tests/__init__.py ]; then
-                        touch tests/__init__.py
-                    fi
+                    # Activate virtual environment
+                    . $VENV_DIR/bin/activate
                     
-                    # Create basic test file if it doesn't exist
-                    if [ ! -f tests/test_basic.py ]; then
-                        echo "def test_basic_setup():" > tests/test_basic.py
-                        echo "    \"\"\"Basic test to verify pytest can run.\"\"\"" >> tests/test_basic.py
-                        echo "    assert True, \"Basic test is working\"" >> tests/test_basic.py
-                        echo "" >> tests/test_basic.py
-                        echo "def test_app_config():" >> tests/test_basic.py
-                        echo "    \"\"\"Test that app config can be imported\"\"\"" >> tests/test_basic.py
-                        echo "    try:" >> tests/test_basic.py
-                        echo "        from app import create_app" >> tests/test_basic.py
-                        echo "        assert callable(create_app), \"create_app should be a function\"" >> tests/test_basic.py
-                        echo "    except ImportError:" >> tests/test_basic.py
-                        echo "        # Skip if we can't import the app" >> tests/test_basic.py
-                        echo "        pass" >> tests/test_basic.py
-                    fi
+                    # Create test database
+                    mysql -u jenkins -pjenkins_password -e "DROP DATABASE IF EXISTS student_registration_test;"
+                    mysql -u jenkins -pjenkins_password -e "CREATE DATABASE student_registration_test;"
+                    
+                    # Initialize schema
+                    mysql -u jenkins -pjenkins_password student_registration_test < init.sql
                 '''
             }
         }
 
-        stage('Run Tests') {
+        stage('Run Basic Tests') {
             steps {
-                echo 'Running only Python unit tests (non-Docker tests)...'
+                echo 'Running basic Python unit tests...'
                 sh '''#!/bin/bash
                     # Activate using . instead of source
                     . $VENV_DIR/bin/activate
                     
-                    # Run pytest
-                    python -m pytest tests/ -v -k "not docker"
+                    # Run pytest for non-database, non-docker tests
+                    python -m pytest tests/ -v -k "not docker and not database"
                 '''
             }
         }
-
-        stage('Setup Test Database') {
+        
+        stage('Run Database Tests') {
             steps {
-                withCredentials([string(credentialsId: 'mysql-password', variable: 'MYSQL_PASSWORD')]) {
-                    sh '''#!/bin/bash
-                        # Activate virtual environment
-                        . $VENV_DIR/bin/activate
-                        
-                        # Create test database
-                        mysql -u jenkins -p"${MYSQL_PASSWORD}" -e "DROP DATABASE IF EXISTS student_registration_test;"
-                        mysql -u jenkins -p"${MYSQL_PASSWORD}" -e "CREATE DATABASE student_registration_test;"
-                        
-                        # Initialize schema
-                        mysql -u jenkins -p"${MYSQL_PASSWORD}" student_registration_test < init.sql
-                        
-                        # Set environment variable for testing
-                        export DATABASE_URL="mysql+pymysql://jenkins:${MYSQL_PASSWORD}@localhost/student_registration_test"
-                        
-                        # Run test with database connection
-                        python -m pytest tests/ -v -k "not docker and database"
-                    '''
-                }
+                echo 'Running database tests...'
+                sh '''#!/bin/bash
+                    # Activate using . instead of source
+                    . $VENV_DIR/bin/activate
+                    
+                    # Run pytest for database tests
+                    python -m pytest tests/ -v -k "database"
+                '''
             }
         }
 
         stage('Build Success') {
             steps {
-                echo '✅ Student Registration System built successfully!'
+                echo '✅ Student Registration System built and tested successfully!'
             }
         }
-
     }
     
     post {
         always {
             echo 'Cleaning up workspace...'
+            sh '''
+                # Clean up test database
+                mysql -u jenkins -pjenkins_password -e "DROP DATABASE IF EXISTS student_registration_test;" || true
+            '''
             // cleanWs()
         }
         
