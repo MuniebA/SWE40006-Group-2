@@ -191,7 +191,7 @@ from sqlalchemy import text
 app = create_app('testing')  # or whatever config you use in Docker
 with app.app_context():
     try:
-        db.session.execute('SELECT 1')
+        db.session.execute(text('SELECT 1'))
         print('✅ Database connection successful')
     except Exception as e:
         print('❌ Database connection failed:', e)
@@ -278,7 +278,7 @@ with app.test_client() as client:
             if response.status_code == 500:
                 error_text = response.data.decode('utf-8')
                 print(f'Error response: {error_text[:500]}...')  # Print first 500 chars of error
-                
+
                 # Try to trigger the error again with app.debug=True to get traceback
                 app.config['DEBUG'] = True
                 app.testing = True
@@ -297,6 +297,57 @@ with app.test_client() as client:
             print(f'Exception during testing: {e}')
             traceback.print_exc()
 " || true
+
+                    echo "Detailed Error Debugging:"
+                    docker-compose exec -T web bash -c "
+python -c '
+import traceback
+from app import create_app, db
+from sqlalchemy import text, inspect
+from flask_wtf.csrf import CSRFProtect
+
+# Create app with CSRF disabled
+app = create_app(\"testing\")
+app.config[\"WTF_CSRF_ENABLED\"] = False
+app.config[\"DEBUG\"] = True
+
+with app.app_context():
+    try:
+        # Test database connection first
+        print(\"Database config:\", app.config[\"SQLALCHEMY_DATABASE_URI\"])
+        
+        # Check if database connection works
+        result = db.session.execute(text(\"SELECT 1\")).scalar()
+        print(\"Database connection works, result:\", result)
+        
+        # Check if all required tables exist
+        inspector = inspect(db.engine)
+        table_names = inspector.get_table_names()
+        print(\"Available database tables:\", table_names)
+        
+        # Check if users table has expected columns
+        if \"users\" in table_names:
+            columns = [col[\"name\"] for col in inspector.get_columns(\"users\")]
+            print(\"Users table columns:\", columns)
+        
+        # Now test the actual endpoints
+        with app.test_client() as client:
+            # Test registration endpoint
+            print(\"Testing registration endpoint...\")
+            response = client.post(\"/register\", data={
+                \"username\": \"test_debug_user\",
+                \"email\": \"debug@example.com\",
+                \"password\": \"Password123!\",
+                \"confirm_password\": \"Password123!\"
+            })
+            print(\"Registration status:\", response.status_code)
+            if response.status_code == 500:
+                print(\"Response data:\", response.data.decode()[0:500])
+    except Exception as e:
+        print(\"Exception:\", e)
+        traceback.print_exc()
+'
+"
                 '''
             }
             post {
