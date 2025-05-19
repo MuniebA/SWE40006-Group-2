@@ -98,7 +98,7 @@ pipeline {
             steps {
                 sh '''#!/bin/bash
                     echo "MySQL Status:"
-                    sudo service mysql status || true
+                    service mysql status || true
                     
                     echo "Database List:"
                     mysql -u jenkins -ppassword -e "SHOW DATABASES;" || true
@@ -109,14 +109,14 @@ pipeline {
             }
         }
         
-        stage('Setup Test Database') {
+        stage('Run Database Tests') {
             steps {
                 sh '''#!/bin/bash
-                    # Activate virtual environment
+                    # Activate using . instead of source
                     . $VENV_DIR/bin/activate
                     
-                    # Run database setup script
-                    ./setup_db.sh
+                    # Run pytest for database tests
+                    python -m pytest tests/ -v -k "database"
                 '''
             }
         }
