@@ -123,6 +123,22 @@ pipeline {
             }
         }
 
+        stage('Verify Docker') {
+            steps {
+                echo 'Verifying Docker installation...'
+                sh '''
+                    # Check Docker is installed
+                    docker --version
+                    
+                    # Check Docker Compose is installed
+                    docker-compose --version
+                    
+                    # Verify Docker can run containers
+                    docker run hello-world
+                '''
+            }
+        }
+
         stage('Build Docker Image') {
             steps {
                 echo 'Building Docker image...'
