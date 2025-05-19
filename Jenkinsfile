@@ -7,6 +7,8 @@ pipeline {
         FLASK_DEBUG = 'true'
         DATABASE_URL = 'mysql+pymysql://jenkins:password@localhost/student_registration'
         TEST_DATABASE_URL = 'mysql+pymysql://jenkins:password@localhost/student_registration_test'
+        DOCKER_IMAGE_NAME = 'student-registration-system'
+        DOCKER_IMAGE_TAG = "${BUILD_NUMBER}"
     }
 
     stages {
@@ -121,9 +123,75 @@ pipeline {
             }
         }
 
+        stage('Build Docker Image') {
+            steps {
+                echo 'Building Docker image...'
+                sh '''
+                    # Build the Docker image with a unique tag
+                    docker build -t $DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG .
+                    
+                    # Also tag as latest
+                    docker tag $DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG $DOCKER_IMAGE_NAME:latest
+                    
+                    # List images to verify
+                    docker images | grep $DOCKER_IMAGE_NAME
+                '''
+            }
+        }
+        
+        stage('Test with Docker Compose') {
+            steps {
+                echo 'Starting Docker Compose environment...'
+                sh '''
+                    # Ensure we have a clean environment
+                    docker-compose down -v || true
+                    
+                    # Start containers in detached mode
+                    docker-compose up -d
+                    
+                    # Wait for containers to be ready
+                    echo "Waiting for containers to start..."
+                    sleep 15
+                    
+                    # Check if containers are running
+                    docker-compose ps
+                    
+                    # Run Docker-specific tests
+                    . $VENV_DIR/bin/activate
+                    python -m pytest tests/ -v -k "docker"
+                    
+                    # Show logs for debugging
+                    docker-compose logs
+                '''
+            }
+            post {
+                always {
+                    echo 'Shutting down Docker Compose environment...'
+                    sh 'docker-compose down -v || true'
+                }
+            }
+        }
+
         stage('Build Success') {
             steps {
                 echo '✅ Student Registration System built and tested successfully!'
+            }
+        }
+        
+        stage('Push Docker Image') {
+            when {
+                branch 'main'  // Only run on main branch
+            }
+            steps {
+                echo 'Pushing Docker image to registry...'
+                sh '''
+                    # Example - replace with your actual registry
+                    # docker tag $DOCKER_IMAGE_NAME:latest your-registry/student-registration:latest
+                    # docker push your-registry/student-registration:latest
+                    
+                    echo "Docker image would be pushed to registry here."
+                    echo "Image: $DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG"
+                '''
             }
         }
     }
@@ -134,6 +202,10 @@ pipeline {
             sh '''
                 # Clean up test database
                 mysql -u jenkins -ppassword -e "DROP DATABASE IF EXISTS student_registration_test;" || true
+                
+                # Clean up Docker resources
+                docker-compose down -v || true
+                docker system prune -f || true
             '''
             // cleanWs()
         }

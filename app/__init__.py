@@ -1,4 +1,4 @@
-from flask import Flask, render_template
+from flask import Flask, render_template, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
 from flask_migrate import Migrate
@@ -37,15 +37,22 @@ def create_app(config_name='default'):
     from .routes.admin import admin as admin_blueprint
     from .routes.student import student as student_blueprint
     from .routes.classes import classes as classes_blueprint
+    from .routes.health import health as health_blueprint
 
     app.register_blueprint(auth_blueprint)
     app.register_blueprint(admin_blueprint, url_prefix='/admin')
     app.register_blueprint(student_blueprint, url_prefix='/student')
     app.register_blueprint(classes_blueprint, url_prefix='/classes')
+    app.register_blueprint(health_blueprint, url_prefix='/health')
 
     # Default route
     @app.route('/')
     def index():
         return render_template('index.html', now=datetime.now())
+    
+    # # Health check endpoint for Docker
+    # @app.route('/health')
+    # def health_check():
+    #     return jsonify({"status": "healthy"}), 200
 
     return app

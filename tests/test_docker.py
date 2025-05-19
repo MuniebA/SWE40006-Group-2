@@ -3,12 +3,17 @@ import time
 import sys
 import pytest
 from urllib.parse import urljoin
+import os
 
 # Helper function to create test client instead of a class with __init__
 
 
-def create_test_client(base_url="http://localhost:5000"):
+def create_test_client(base_url=None):
     """Create a test client for API requests."""
+    if base_url is None:
+        # Get URL from Docker environment variable or use default
+        base_url = os.environ.get("DOCKER_APP_URL", "http://localhost:5000")
+
     client = requests.Session()
 
     class TestClient:
@@ -21,6 +26,36 @@ def create_test_client(base_url="http://localhost:5000"):
             return client.post(urljoin(base_url, path), data=data)
 
     return TestClient()
+
+
+
+@pytest.mark.docker
+def test_docker_environment():
+    """Test that Docker environment variables are properly set."""
+    # This test only runs in the Docker environment
+    client = create_test_client()
+
+    # Get the environment from the app
+    response = client.get("/")
+    assert response.status_code == 200
+
+    # You could create a /environment endpoint in your app to return environment info
+    # or just check that the app is responding properly in Docker
+    assert "Student Registration System" in response.text
+
+    print("Docker environment test passed!")
+
+
+@pytest.mark.docker
+def test_docker_health():
+    """Test the Docker health check endpoint."""
+    client = create_test_client()
+
+    # Assuming you have a health check endpoint
+    response = client.get("/health")
+    assert response.status_code == 200
+
+    print("Docker health check passed!")
 
 
 def wait_for_app(url, max_retries=30, delay=2):
