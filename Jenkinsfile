@@ -159,6 +159,12 @@ pipeline {
             steps {
                 echo 'Starting Docker Compose environment...'
                 sh '''
+                    # Check for port conflicts before starting
+                    if netstat -tuln | grep -q ":3306"; then
+                        echo "Port 3306 is already in use. Modifying docker-compose.yml to use port 3307 instead..."
+                        sed -i 's/"3306:3306"/"3307:3306"/g' docker-compose.yml
+                    fi
+                    
                     # Ensure we have a clean environment
                     docker-compose down -v || true
                     
@@ -167,7 +173,7 @@ pipeline {
                     
                     # Wait for containers to be ready
                     echo "Waiting for containers to start..."
-                    sleep 15
+                    sleep 20
                     
                     # Check if containers are running
                     docker-compose ps
@@ -176,7 +182,7 @@ pipeline {
                     . $VENV_DIR/bin/activate
                     python -m pytest tests/ -v -k "docker"
                     
-                    # Show logs for debugging
+                    # Show logs for debugging in case of failure
                     docker-compose logs
                 '''
             }
