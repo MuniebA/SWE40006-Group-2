@@ -187,6 +187,7 @@ pipeline {
                     echo "Testing database connection directly from web container:"
                     docker-compose exec -T web python -c "
 from app import create_app, db
+from sqlalchemy import text
 app = create_app('testing')  # or whatever config you use in Docker
 with app.app_context():
     try:
@@ -239,13 +240,62 @@ python -c 'import os; print(\"DATABASE_URL=\", os.environ.get(\"DATABASE_URL\"))
 
 # Test database connection directly
 echo 'Testing database connection:'
-python -c 'from app import db;
+python -c 'from app import create_app, db;
+from sqlalchemy import text;
 app = create_app(\"testing\");
 try:
     db.session.execute(\"SELECT 1\");
     print(\"Database connection OK\")
 except Exception as e:
     print(\"Database error:\", e)'
+" || true
+
+                    echo "Detailed Flask route debugging:"
+                    docker-compose exec -T web python -c "
+import traceback
+from flask import Flask
+from app import create_app
+from flask_wtf.csrf import CSRFProtect
+
+# Create test app with CSRF disabled for testing
+app = create_app('testing')
+app.config['WTF_CSRF_ENABLED'] = False  # Disable CSRF for this test
+
+with app.test_client() as client:
+    with app.app_context():
+        try:
+            # Try the registration endpoint
+            print('Testing registration endpoint...')
+            response = client.post('/register', data={
+                'username': 'debug_user',
+                'email': 'debug@example.com',
+                'password': 'Debug123!',
+                'confirm_password': 'Debug123!'
+            })
+            print(f'Registration Status: {response.status_code}')
+
+            # If error, try to get error details
+            if response.status_code == 500:
+                error_text = response.data.decode('utf-8')
+                print(f'Error response: {error_text[:500]}...')  # Print first 500 chars of error
+                
+                # Try to trigger the error again with app.debug=True to get traceback
+                app.config['DEBUG'] = True
+                app.testing = True
+                try:
+                    response = client.post('/register', data={
+                        'username': 'debug_user2',
+                        'email': 'debug2@example.com',
+                        'password': 'Debug123!',
+                        'confirm_password': 'Debug123!'
+                    })
+                    print(f'Debug mode response: {response.status_code}')
+                except Exception as e:
+                    print('Exception during debug mode testing:')
+                    traceback.print_exc()
+        except Exception as e:
+            print(f'Exception during testing: {e}')
+            traceback.print_exc()
 " || true
                 '''
             }
