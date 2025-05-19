@@ -11,8 +11,7 @@ class Config:
     CSRF_ENABLED = True
 
     # Database
-    SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL') or \
-        'mysql+pymysql://root:@localhost/student_registration'
+    SSQLALCHEMY_DATABASE_URI = 'mysql+pymysql://testuser:testpass@db:3306/testdb'
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
     # Session

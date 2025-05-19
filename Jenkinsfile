@@ -155,41 +155,41 @@ pipeline {
             }
         }
         
-        stage('Test with Docker Compose') {
+        stage('Docker Tests') {
             steps {
-                echo 'Starting Docker Compose environment...'
                 sh '''
-                    # Check for port conflicts before starting
+                    # Check if port 3306 is in use
                     if netstat -tuln | grep -q ":3306"; then
                         echo "Port 3306 is already in use. Modifying docker-compose.yml to use port 3307 instead..."
                         sed -i 's/"3306:3306"/"3307:3306"/g' docker-compose.yml
                     fi
                     
-                    # Ensure we have a clean environment
-                    docker-compose down -v || true
+                    # Bring down any existing containers
+                    docker-compose down -v
                     
-                    # Start containers in detached mode
+                    # Start Docker Compose with database and web app
                     docker-compose up -d
                     
-                    # Wait for containers to be ready
                     echo "Waiting for containers to start..."
                     sleep 20
                     
-                    # Check if containers are running
+                    # Show running containers
                     docker-compose ps
                     
-                    # Run Docker-specific tests
-                    . $VENV_DIR/bin/activate
-                    python -m pytest tests/ -v -k "docker"
+                    # Inspect the logs to debug any issues
+                    echo "Checking web container logs for errors:"
+                    docker-compose logs web
                     
-                    # Show logs for debugging in case of failure
-                    docker-compose logs
+                    # Run the tests
+                    . venv/bin/activate && python -m pytest tests/ -v -k docker
                 '''
             }
             post {
                 always {
-                    echo 'Shutting down Docker Compose environment...'
-                    sh 'docker-compose down -v || true'
+                    sh '''
+                        echo "Shutting down Docker Compose environment..."
+                        docker-compose down -v
+                    '''
                 }
             }
         }
