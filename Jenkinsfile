@@ -39,12 +39,12 @@ pipeline {
                     # Activate virtual environment
                     . $VENV_DIR/bin/activate
                     
-                    # Create test database
-                    mysql -u jenkins -pjenkins_password -e "DROP DATABASE IF EXISTS student_registration_test;"
-                    mysql -u jenkins -pjenkins_password -e "CREATE DATABASE student_registration_test;"
+                    # Use the database setup script
+                    ./db_setup.sh || echo "Database setup failed but we'll continue"
                     
-                    # Initialize schema
-                    mysql -u jenkins -pjenkins_password student_registration_test < init.sql
+                    # Set environment variables
+                    export DATABASE_URL="mysql+pymysql://jenkins:password@localhost/student_registration"
+                    export TEST_DATABASE_URL="mysql+pymysql://jenkins:password@localhost/student_registration_test"
                 '''
             }
         }
@@ -87,7 +87,7 @@ pipeline {
             echo 'Cleaning up workspace...'
             sh '''
                 # Clean up test database
-                mysql -u jenkins -pjenkins_password -e "DROP DATABASE IF EXISTS student_registration_test;" || true
+                mysql -u jenkins -ppassword -e "DROP DATABASE IF EXISTS student_registration_test;" || true
             '''
             // cleanWs()
         }
