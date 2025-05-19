@@ -164,6 +164,9 @@ pipeline {
                         sed -i 's/"3306:3306"/"3307:3306"/g' docker-compose.yml
                     fi
                     
+                    # Ensure Flask debug is enabled in docker-compose.yml
+                    grep -q "FLASK_DEBUG" docker-compose.yml || echo "Warning: FLASK_DEBUG not set in docker-compose.yml"
+                    
                     # Bring down any existing containers
                     docker-compose down -v
                     
@@ -180,8 +183,31 @@ pipeline {
                     echo "Checking web container logs for errors:"
                     docker-compose logs web
                     
+                    # Direct database connectivity test - NEW ADDITION
+                    echo "Testing database connection directly from web container:"
+                    docker-compose exec -T web python -c "
+                    from app import db
+                    try:
+                        db.session.execute('SELECT 1')
+                        print('✅ Database connection successful')
+                    except Exception as e:
+                        print('❌ Database connection failed:', e)
+                    " || true
+                    
                     # Run the tests
                     . venv/bin/activate && python -m pytest tests/ -v -k docker
+                    
+                    # Detailed error logs after test runs (especially if they fail) - NEW ADDITION
+                    echo "Checking detailed web container logs after tests:"
+                    docker-compose logs --tail=50 web
+                    
+                    # Try to get Gunicorn error logs
+                    echo "Checking Gunicorn error logs (if available):"
+                    docker-compose exec -T web bash -c "cat /var/log/gunicorn/* 2>/dev/null || echo 'No Gunicorn logs found'" || true
+                    
+                    # Check application error logs
+                    echo "Checking application error logs (if available):"
+                    docker-compose exec -T web bash -c "cat /app/logs/app.log 2>/dev/null || echo 'No application logs found'" || true
                 '''
             }
             post {
@@ -189,6 +215,12 @@ pipeline {
                     sh '''
                         echo "Shutting down Docker Compose environment..."
                         docker-compose down -v
+                    '''
+                }
+                failure {
+                    sh '''
+                        echo "Test failed! Capturing final container logs:"
+                        docker-compose logs || true
                     '''
                 }
             }

@@ -28,6 +28,29 @@ def create_test_client(base_url=None):
     return TestClient()
 
 
+# Example of proper CSRF handling in tests
+def test_registration():
+    client = create_test_client()
+    
+    # First get the page to retrieve the CSRF token
+    response = client.get("/register")
+    html = response.data.decode('utf-8')
+    
+    # Extract the CSRF token (pattern may vary)
+    csrf_token = re.search('name="csrf_token" value="(.+?)"', html).group(1)
+    
+    # Include the token in your POST request
+    test_user = {
+        'username': f'testuser_{int(time.time())}',
+        'email': f'test_{int(time.time())}@example.com',
+        'password': 'Test123!',
+        'confirm_password': 'Test123!',
+        'csrf_token': csrf_token
+    }
+    
+    response = client.post("/register", data=test_user)
+    assert response.status_code in [200, 302]
+
 
 @pytest.mark.docker
 def test_docker_environment():
