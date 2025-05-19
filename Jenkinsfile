@@ -186,12 +186,14 @@ pipeline {
                     # Direct database connectivity test
                     echo "Testing database connection directly from web container:"
                     docker-compose exec -T web python -c "
-from app import db
-try:
-    db.session.execute('SELECT 1')
-    print('✅ Database connection successful')
-except Exception as e:
-    print('❌ Database connection failed:', e)
+from app import create_app, db
+app = create_app('testing')  # or whatever config you use in Docker
+with app.app_context():
+    try:
+        db.session.execute('SELECT 1')
+        print('✅ Database connection successful')
+    except Exception as e:
+        print('❌ Database connection failed:', e)
 " || true
                     
                     # Run the tests
@@ -237,11 +239,12 @@ python -c 'import os; print(\"DATABASE_URL=\", os.environ.get(\"DATABASE_URL\"))
 
 # Test database connection directly
 echo 'Testing database connection:'
-python -c 'from app import db; 
-try: 
-    db.session.execute(\"SELECT 1\"); 
-    print(\"Database connection OK\") 
-except Exception as e: 
+python -c 'from app import db;
+app = create_app(\"testing\");
+try:
+    db.session.execute(\"SELECT 1\");
+    print(\"Database connection OK\")
+except Exception as e:
     print(\"Database error:\", e)'
 " || true
                 '''
