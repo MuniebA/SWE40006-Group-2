@@ -189,25 +189,25 @@ with app.app_context():
                     
                     # Use Python to download and extract Terraform (Python should be available since you're using it for your app)
                     python3 -c '
-        import urllib.request
-        import zipfile
-        import os
-        import sys
+import urllib.request
+import zipfile
+import os
+import sys
 
-        version = os.environ.get("TERRAFORM_VERSION", "1.7.4")
-        url = f"https://releases.hashicorp.com/terraform/{version}/terraform_{version}_linux_amd64.zip"
-        zip_path = "terraform.zip"
+version = os.environ.get("TERRAFORM_VERSION", "1.7.4")
+url = f"https://releases.hashicorp.com/terraform/{version}/terraform_{version}_linux_amd64.zip"
+zip_path = "terraform.zip"
 
-        print(f"Downloading Terraform {version}...")
-        urllib.request.urlretrieve(url, zip_path)
+print(f"Downloading Terraform {version}...")
+urllib.request.urlretrieve(url, zip_path)
 
-        print("Extracting Terraform binary...")
-        with zipfile.ZipFile(zip_path, "r") as zip_ref:
-            zip_ref.extractall(".")
+print("Extracting Terraform binary...")
+with zipfile.ZipFile(zip_path, "r") as zip_ref:
+    zip_ref.extractall(".")
 
-        os.chmod("terraform", 0o755)
-        print("Terraform installed successfully!")
-        '
+os.chmod("terraform", 0o755)
+print("Terraform installed successfully!")
+'
                     
                     # Add to PATH for this session
                     export PATH=${WORKSPACE}/terraform:$PATH
