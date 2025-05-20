@@ -161,9 +161,6 @@ with app.app_context():
         }
 
         stage('Push Docker Image') {
-            when {
-                branch 'main'  // Only run on main branch
-            }
             steps {
                 sh '''
                     # Login to Docker Hub
@@ -219,9 +216,6 @@ print("Terraform installed successfully!")
         }
         
         stage('Deploy to AWS with Terraform') {
-            when {
-                branch 'main'  // Only run on main branch
-            }
             steps {
                 sh '''
                     # Set AWS credentials
@@ -241,15 +235,31 @@ print("Terraform installed successfully!")
                     # Apply the changes
                     terraform apply -auto-approve tfplan
                     
-                    # Output the endpoint or other relevant information
+                    # Extract and display the EC2 IP address
+                    echo "===================================================="
+                    echo "                DEPLOYMENT DETAILS                   "
+                    echo "===================================================="
+                    
+                    # Output all Terraform outputs
+                    echo "All Terraform outputs:"
                     terraform output
+                    
+                    # Extract and highlight the EC2 IP address specifically
+                    echo "Extracting website URL information..."
+                    if terraform output -json | grep -q "instance_ip"; then
+                        EC2_IP=$(terraform output -raw instance_ip || terraform output -json | grep -o '"instance_ip":[^,}]*' | cut -d ':' -f2 | tr -d '\\"' || echo "Not found")
+                        echo "===================================================="
+                        echo "🌐 WEBSITE URL: http://$EC2_IP/"
+                        echo "===================================================="
+                        
+                        # Save the IP address to a file for later use
+                        echo "$EC2_IP" > ec2_ip.txt
+                    else
+                        echo "Warning: Could not find instance_ip in Terraform outputs"
+                        echo "Available outputs:"
+                        terraform output
+                    fi
                 '''
-            }
-        }
-
-        stage('Build Success') {
-            steps {
-                echo '✅ Student Registration System built, tested, and deployed successfully!'
             }
         }
     }
