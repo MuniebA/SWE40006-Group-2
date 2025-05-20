@@ -182,28 +182,38 @@ with app.app_context():
         stage('Install Terraform') {
             steps {
                 sh '''
-                    # Install required tools
-                    echo "Installing required tools..."
-                    sudo apt-get update
-                    sudo apt-get install -y unzip curl
-                    
-                    # Download and install Terraform
+                    # Install Terraform without requiring sudo or unzip
                     echo "Installing Terraform ${TERRAFORM_VERSION}..."
                     mkdir -p ${WORKSPACE}/terraform
                     cd ${WORKSPACE}/terraform
                     
-                    # Download Terraform
-                    curl -Os https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip
-                    
-                    # Unzip and install
-                    unzip -o terraform_${TERRAFORM_VERSION}_linux_amd64.zip
-                    chmod +x terraform
+                    # Use Python to download and extract Terraform (Python should be available since you're using it for your app)
+                    python3 -c '
+        import urllib.request
+        import zipfile
+        import os
+        import sys
+
+        version = os.environ.get("TERRAFORM_VERSION", "1.7.4")
+        url = f"https://releases.hashicorp.com/terraform/{version}/terraform_{version}_linux_amd64.zip"
+        zip_path = "terraform.zip"
+
+        print(f"Downloading Terraform {version}...")
+        urllib.request.urlretrieve(url, zip_path)
+
+        print("Extracting Terraform binary...")
+        with zipfile.ZipFile(zip_path, "r") as zip_ref:
+            zip_ref.extractall(".")
+
+        os.chmod("terraform", 0o755)
+        print("Terraform installed successfully!")
+        '
                     
                     # Add to PATH for this session
                     export PATH=${WORKSPACE}/terraform:$PATH
                     
                     # Verify installation
-                    terraform version
+                    ./terraform version
                 '''
             }
         }
