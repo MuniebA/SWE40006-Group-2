@@ -182,6 +182,11 @@ with app.app_context():
         stage('Install Terraform') {
             steps {
                 sh '''
+                    # Install required tools
+                    echo "Installing required tools..."
+                    sudo apt-get update
+                    sudo apt-get install -y unzip curl
+                    
                     # Download and install Terraform
                     echo "Installing Terraform ${TERRAFORM_VERSION}..."
                     mkdir -p ${WORKSPACE}/terraform
