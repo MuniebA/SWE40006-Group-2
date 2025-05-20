@@ -7,8 +7,10 @@ pipeline {
         FLASK_DEBUG = 'true'
         DATABASE_URL = 'mysql+pymysql://jenkins:password@localhost/student_registration'
         TEST_DATABASE_URL = 'mysql+pymysql://jenkins:password@localhost/student_registration_test'
-        DOCKER_IMAGE_NAME = 'student-registration-system'
+        DOCKER_IMAGE_NAME = 'korosensei001/student-registration'
         DOCKER_IMAGE_TAG = "${BUILD_NUMBER}"
+        DOCKER_HUB_CREDENTIALS = credentials('docker-hub-credentials')
+        AWS_CREDENTIALS = credentials('aws-credentials')
     }
 
     stages {
@@ -157,26 +159,63 @@ with app.app_context():
             }
         }
 
-        stage('Build Success') {
-            steps {
-                echo '✅ Student Registration System built and tested successfully!'
-            }
-        }
-        
         stage('Push Docker Image') {
             when {
                 branch 'main'  // Only run on main branch
             }
             steps {
-                echo 'Pushing Docker image to registry...'
                 sh '''
-                    # Example - replace with your actual registry
-                    # docker tag $DOCKER_IMAGE_NAME:latest your-registry/student-registration:latest
-                    # docker push your-registry/student-registration:latest
+                    # Login to Docker Hub
+                    echo $DOCKER_HUB_CREDENTIALS_PSW | docker login -u $DOCKER_HUB_CREDENTIALS_USR --password-stdin
                     
-                    echo "Docker image would be pushed to registry here."
-                    echo "Image: $DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG"
+                    # Push the Docker image
+                    docker push $DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG
+                    docker push $DOCKER_IMAGE_NAME:latest
+                    
+                    # Logout to clean up credentials
+                    docker logout
                 '''
+            }
+        }
+        
+        stage('Verify Terraform') {
+            steps {
+                sh '''
+                    # Check if Terraform is installed
+                    terraform version
+                '''
+            }
+        }
+        
+        stage('Deploy to AWS with Terraform') {
+            when {
+                branch 'main'  // Only run on main branch
+            }
+            steps {
+                sh '''
+                    # Set AWS credentials
+                    export AWS_ACCESS_KEY_ID=$AWS_CREDENTIALS_USR
+                    export AWS_SECRET_ACCESS_KEY=$AWS_CREDENTIALS_PSW
+                    export AWS_DEFAULT_REGION=ap-southeast-1  # Adjust if needed
+                    
+                    # Initialize Terraform
+                    terraform init
+                    
+                    # Plan the changes
+                    terraform plan -out=tfplan
+                    
+                    # Apply the changes
+                    terraform apply -auto-approve tfplan
+                    
+                    # Output the endpoint or other relevant information
+                    terraform output
+                '''
+            }
+        }
+
+        stage('Build Success') {
+            steps {
+                echo '✅ Student Registration System built, tested, and deployed successfully!'
             }
         }
     }
@@ -196,11 +235,19 @@ with app.app_context():
         }
         
         success {
-            echo 'Build completed successfully!'
+            echo 'Build, test, and deployment completed successfully!'
         }
         
         failure {
-            echo 'Build failed! Check the logs for details.'
+            echo 'Pipeline failed! Check the logs for details.'
+            
+            // Optional: Roll back Terraform changes if deployment failed
+            sh '''
+                if [ -d .terraform ]; then
+                    echo "Attempting to roll back Terraform changes..."
+                    terraform destroy -auto-approve || true
+                fi
+            '''
         }
     }
 }
