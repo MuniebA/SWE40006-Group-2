@@ -184,14 +184,14 @@ with app.app_context():
                     mkdir -p ${WORKSPACE}/terraform
                     cd ${WORKSPACE}/terraform
                     
-                    # Use Python to download and extract Terraform
+                    # Use Python to download and extract Terraform (Python should be available since you're using it for your app)
                     python3 -c '
 import urllib.request
 import zipfile
 import os
 import sys
 
-version = os.environ.get("TERRAFORM_VERSION", "1.12.0")
+version = os.environ.get("TERRAFORM_VERSION", "1.7.4")
 url = f"https://releases.hashicorp.com/terraform/{version}/terraform_{version}_linux_amd64.zip"
 zip_path = "terraform.zip"
 
@@ -215,77 +215,7 @@ print("Terraform installed successfully!")
             }
         }
         
-        stage('Destroy AWS Resources') {
-            steps {
-                sh '''
-                    # Install Terraform if needed
-                    if [ ! -f "./terraform" ]; then
-                        echo "Installing Terraform ${TERRAFORM_VERSION}..."
-                        mkdir -p terraform_tmp
-                        cd terraform_tmp
-                        
-                        python3 -c '
-import urllib.request
-import zipfile
-import os
-
-version = "1.12.0" 
-url = f"https://releases.hashicorp.com/terraform/{version}/terraform_{version}_linux_amd64.zip"
-zip_path = "terraform.zip"
-
-print(f"Downloading Terraform {version}...")
-urllib.request.urlretrieve(url, zip_path)
-
-print("Extracting Terraform binary...")
-with zipfile.ZipFile(zip_path, "r") as zip_ref:
-    zip_ref.extractall(".")
-
-os.chmod("terraform", 0o755)
-print("Terraform installed successfully!")
-'
-                        mv terraform ../ 
-                        cd ..
-                        rm -rf terraform_tmp
-                    fi
-                    
-                    # Debug AWS credentials
-                    echo "AWS credentials debug:"
-                    echo "Access key first 4 chars: ${AWS_ACCESS_KEY_ID:0:4}..."
-                    echo "Secret key exists: $(if [ -n "$AWS_SECRET_ACCESS_KEY" ]; then echo "YES"; else echo "NO"; fi)"
-                    
-                    # DIRECT CREDENTIAL APPROACH
-                    # ===========================
-                    # Note: For testing only, replace with your actual keys
-                    export AWS_ACCESS_KEY_ID=$AWS_CREDENTIALS_USR
-                    export AWS_SECRET_ACCESS_KEY=$AWS_CREDENTIALS_PSW
-                    export AWS_DEFAULT_REGION="ap-southeast-1"
-                    
-                    # Configure AWS provider directly in a temporary file
-                    echo 'provider "aws" {
-                      region     = "ap-southeast-1"
-                      access_key = "'$AWS_ACCESS_KEY_ID'"
-                      secret_key = "'$AWS_SECRET_ACCESS_KEY'"
-                    }' > aws_provider_override.tf
-                    
-                    # Initialize and destroy with verbose logging
-                    ./terraform init -reconfigure
-                    
-                    # Force refresh state
-                    ./terraform refresh
-                    
-                    # Run destroy with auto-approve and debug output
-                    TF_LOG=DEBUG ./terraform destroy -auto-approve
-                    
-                    echo "✅ Terraform destroy completed!"
-                '''
-            }
-        }
-        
         stage('Deploy to AWS with Terraform') {
-            when {
-                // Only run if not destroying resources
-                expression { return params.ACTION != 'destroy' }
-            }
             steps {
                 sh '''
                     # Set AWS credentials
