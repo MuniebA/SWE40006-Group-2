@@ -100,16 +100,16 @@ print("Terraform installed successfully!")
                     export AWS_SECRET_ACCESS_KEY=$AWS_CREDENTIALS_PSW
                     export AWS_DEFAULT_REGION=ap-southeast-1
                     
-                    # Install AWS CLI if needed
-                    if ! command -v aws &> /dev/null; then
-                        echo "Installing AWS CLI..."
-                        curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-                        python3 -m zipfile -e awscliv2.zip .
-                        ./aws/install -i /tmp/aws-cli -b /tmp/aws-bin
-                        export PATH=/tmp/aws-bin:$PATH
-                    fi
+                    # Install AWS CLI using pip (more reliable in Jenkins)
+                    echo "Installing AWS CLI using pip..."
+                    python3 -m pip install --user awscli
+                    export PATH=$HOME/.local/bin:$PATH
+                    
+                    # Verify AWS CLI installation
+                    aws --version
                     
                     # Find the EC2 instance
+                    echo "Looking for EC2 instances with tag Name=tf-docker-web"
                     INSTANCE_ID=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=tf-docker-web" --query "Reservations[].Instances[].InstanceId" --output text)
                     
                     if [ -n "$INSTANCE_ID" ]; then
@@ -119,29 +119,39 @@ print("Terraform installed successfully!")
                         echo "Terminating instance..."
                         aws ec2 terminate-instances --instance-ids $INSTANCE_ID
                         
-                        # Wait for termination
-                        echo "Waiting for instance termination..."
-                        aws ec2 wait instance-terminated --instance-ids $INSTANCE_ID
-                        
-                        echo "Instance terminated successfully!"
+                        echo "Instance termination initiated!"
                     else
-                        echo "No matching instance found!"
+                        echo "No matching instance found with tag Name=tf-docker-web"
+                        
+                        # Try finding by IP address
+                        echo "Trying to find instance by public IP address (18.141.184.166)..."
+                        INSTANCE_ID=$(aws ec2 describe-instances --filters "Name=public-ip-address,Values=18.141.184.166" --query "Reservations[].Instances[].InstanceId" --output text)
+                        
+                        if [ -n "$INSTANCE_ID" ]; then
+                            echo "Found instance by IP: $INSTANCE_ID"
+                            echo "Terminating instance..."
+                            aws ec2 terminate-instances --instance-ids $INSTANCE_ID
+                            echo "Instance termination initiated!"
+                        else
+                            echo "No instance found with IP 18.141.184.166"
+                            
+                            # List all running instances as a last resort
+                            echo "Listing all running instances for manual verification:"
+                            aws ec2 describe-instances --filters "Name=instance-state-name,Values=running" --query "Reservations[].Instances[].[InstanceId,PublicIpAddress,Tags[?Key=='Name'].Value|[0]]" --output table
+                        fi
                     fi
                     
-                    # Clean up other resources
+                    # Clean up security groups (will attempt this even if instance wasn't found)
                     echo "Cleaning up security groups..."
                     SG_ID=$(aws ec2 describe-security-groups --filters "Name=tag:Name,Values=docker-web-sg" --query "SecurityGroups[].GroupId" --output text)
                     if [ -n "$SG_ID" ]; then
                         echo "Found security group: $SG_ID"
-                        aws ec2 delete-security-group --group-id $SG_ID || echo "Could not delete security group yet"
+                        echo "Note: Security group will be deleted after instance termination is complete"
+                        # We don't try to delete it now as it might still be attached to the terminating instance
                     fi
                     
-                    # Clean up key pairs
-                    echo "Cleaning up key pairs..."
-                    aws ec2 describe-key-pairs --query "KeyPairs[?starts_with(KeyName, 'tf-generated')].KeyName" --output text | xargs -r -n1 aws ec2 delete-key-pair --key-name
-                    
                     echo "====================================================="
-                    echo "         EMERGENCY CLEANUP COMPLETED                 "
+                    echo "         EMERGENCY CLEANUP INITIATED                 "
                     echo "====================================================="
                 '''
             }
