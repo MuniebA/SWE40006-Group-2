@@ -7,7 +7,7 @@ pipeline {
         FLASK_DEBUG = 'true'
         DATABASE_URL = 'mysql+pymysql://jenkins:password@localhost/student_registration'
         TEST_DATABASE_URL = 'mysql+pymysql://jenkins:password@localhost/student_registration_test'
-        DOCKER_IMAGE_NAME = 'korosensei001/student-registration'
+        DOCKER_IMAGE_NAME = 'munieb/student-registration'
         DOCKER_IMAGE_TAG = "${BUILD_NUMBER}"
         DOCKER_HUB_CREDENTIALS = credentials('docker-hub-credentials')
         AWS_CREDENTIALS = credentials('aws-credentials')
