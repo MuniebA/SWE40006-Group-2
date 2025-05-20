@@ -92,6 +92,61 @@ print("Terraform installed successfully!")
             }
         }
     }
+
+    stage('Emergency AWS Resource Cleanup') {
+        steps {
+            sh '''#!/bin/bash
+                # Set AWS credentials
+                export AWS_ACCESS_KEY_ID=$AWS_CREDENTIALS_USR
+                export AWS_SECRET_ACCESS_KEY=$AWS_CREDENTIALS_PSW
+                export AWS_DEFAULT_REGION=ap-southeast-1
+                
+                # Install AWS CLI if needed
+                if ! command -v aws &> /dev/null; then
+                    echo "Installing AWS CLI..."
+                    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+                    python3 -m zipfile -e awscliv2.zip .
+                    ./aws/install -i /tmp/aws-cli -b /tmp/aws-bin
+                    export PATH=/tmp/aws-bin:$PATH
+                fi
+                
+                # Find the EC2 instance
+                INSTANCE_ID=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=tf-docker-web" --query "Reservations[].Instances[].InstanceId" --output text)
+                
+                if [ -n "$INSTANCE_ID" ]; then
+                    echo "Found instance: $INSTANCE_ID"
+                    
+                    # Terminate the instance
+                    echo "Terminating instance..."
+                    aws ec2 terminate-instances --instance-ids $INSTANCE_ID
+                    
+                    # Wait for termination
+                    echo "Waiting for instance termination..."
+                    aws ec2 wait instance-terminated --instance-ids $INSTANCE_ID
+                    
+                    echo "Instance terminated successfully!"
+                else
+                    echo "No matching instance found!"
+                fi
+                
+                # Clean up other resources
+                echo "Cleaning up security groups..."
+                SG_ID=$(aws ec2 describe-security-groups --filters "Name=tag:Name,Values=docker-web-sg" --query "SecurityGroups[].GroupId" --output text)
+                if [ -n "$SG_ID" ]; then
+                    echo "Found security group: $SG_ID"
+                    aws ec2 delete-security-group --group-id $SG_ID || echo "Could not delete security group yet"
+                fi
+                
+                # Clean up key pairs
+                echo "Cleaning up key pairs..."
+                aws ec2 describe-key-pairs --query "KeyPairs[?starts_with(KeyName, 'tf-generated')].KeyName" --output text | xargs -r -n1 aws ec2 delete-key-pair --key-name
+                
+                echo "====================================================="
+                echo "         EMERGENCY CLEANUP COMPLETED                 "
+                echo "====================================================="
+            '''
+        }
+    }
     
     post {
         success {
