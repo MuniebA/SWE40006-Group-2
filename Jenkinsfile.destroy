@@ -32,15 +32,31 @@ pipeline {
         stage('Install Terraform') {
             steps {
                 sh '''#!/bin/bash
-                    # Install Terraform
+                    # Install Terraform without requiring unzip
                     echo "Installing Terraform ${TERRAFORM_VERSION}..."
                     mkdir -p ${WORKSPACE}/terraform
                     cd ${WORKSPACE}/terraform
                     
-                    # Download and extract Terraform
-                    curl -s https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip -o terraform.zip
-                    unzip -o terraform.zip
-                    chmod +x terraform
+                    # Use Python to download and extract Terraform
+                    python3 -c '
+import urllib.request
+import zipfile
+import os
+
+version = os.environ.get("TERRAFORM_VERSION", "1.12.0")
+url = f"https://releases.hashicorp.com/terraform/{version}/terraform_{version}_linux_amd64.zip"
+zip_path = "terraform.zip"
+
+print(f"Downloading Terraform {version}...")
+urllib.request.urlretrieve(url, zip_path)
+
+print("Extracting Terraform binary...")
+with zipfile.ZipFile(zip_path, "r") as zip_ref:
+    zip_ref.extractall(".")
+
+os.chmod("terraform", 0o755)
+print("Terraform installed successfully!")
+'
                     
                     # Add to PATH for this session
                     export PATH=${WORKSPACE}/terraform:$PATH
