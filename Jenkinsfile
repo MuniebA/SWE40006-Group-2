@@ -11,6 +11,7 @@ pipeline {
         DOCKER_IMAGE_TAG = "${BUILD_NUMBER}"
         DOCKER_HUB_CREDENTIALS = credentials('docker-hub-credentials')
         AWS_CREDENTIALS = credentials('aws-credentials')
+        TERRAFORM_VERSION = "1.12.0"  // Specify the version you want to use
     }
 
     stages {
@@ -178,10 +179,25 @@ with app.app_context():
             }
         }
         
-        stage('Verify Terraform') {
+        stage('Install Terraform') {
             steps {
                 sh '''
-                    # Check if Terraform is installed
+                    # Download and install Terraform
+                    echo "Installing Terraform ${TERRAFORM_VERSION}..."
+                    mkdir -p ${WORKSPACE}/terraform
+                    cd ${WORKSPACE}/terraform
+                    
+                    # Download Terraform
+                    curl -Os https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip
+                    
+                    # Unzip and install
+                    unzip -o terraform_${TERRAFORM_VERSION}_linux_amd64.zip
+                    chmod +x terraform
+                    
+                    # Add to PATH for this session
+                    export PATH=${WORKSPACE}/terraform:$PATH
+                    
+                    # Verify installation
                     terraform version
                 '''
             }
@@ -197,6 +213,9 @@ with app.app_context():
                     export AWS_ACCESS_KEY_ID=$AWS_CREDENTIALS_USR
                     export AWS_SECRET_ACCESS_KEY=$AWS_CREDENTIALS_PSW
                     export AWS_DEFAULT_REGION=ap-southeast-1  # Adjust if needed
+                    
+                    # Use local Terraform installation
+                    export PATH=${WORKSPACE}/terraform:$PATH
                     
                     # Initialize Terraform
                     terraform init
@@ -230,6 +249,9 @@ with app.app_context():
                 # Clean up Docker resources
                 docker-compose down -v || true
                 docker system prune -f || true
+                
+                # Clean up Terraform files
+                rm -rf ${WORKSPACE}/terraform || true
             '''
             // cleanWs()
         }
@@ -244,6 +266,9 @@ with app.app_context():
             // Optional: Roll back Terraform changes if deployment failed
             sh '''
                 if [ -d .terraform ]; then
+                    # Use local Terraform installation
+                    export PATH=${WORKSPACE}/terraform:$PATH
+                    
                     echo "Attempting to roll back Terraform changes..."
                     terraform destroy -auto-approve || true
                 fi
