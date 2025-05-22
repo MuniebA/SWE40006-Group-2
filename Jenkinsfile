@@ -180,7 +180,7 @@ with app.app_context():
             steps {
                 withCredentials([[
                     $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-credentials'
+                    credentialsId: 'set-aws-creds.ps1'
                 ]]) {
                     sh '''#!/bin/bash
                         echo "📦 Initializing Terraform..."
