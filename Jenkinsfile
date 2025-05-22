@@ -180,8 +180,9 @@ pipeline {
             agent {
                 dockerContainer {
                     
-                image 'hashicorp/terraform:1.10.0'
-                //args  '-u root:root'      // so we can write files
+                image 'hashicorp/terraform:1.12.0'
+                args  "-u root:root -v $WORKSPACE:/workspace"
+                workingDir '/workspace'      // so we can write files
                 }
             }
             
@@ -192,11 +193,14 @@ pipeline {
                 passwordVariable: 'AWS_SECRET_ACCESS_KEY'
                 )]) {
                     sh '''
+                        set -euxo pipefail
+
+                        # Set AWS credentials
                         export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
                         export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
                         export AWS_DEFAULT_REGION=ap-southeast-1
                         echo "📦 Initializing Terraform..."
-                        terraform init
+                        terraform init -input=false
 
                         echo "🧱 Validating Terraform..."
                         terraform validate
