@@ -180,7 +180,7 @@ with app.app_context():
             steps {
                 withCredentials([[
                     $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'set-aws-creds.ps1'
+                    credentialsId: 'aws-credentials',
                 ]]) {
                     sh '''
                         export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
