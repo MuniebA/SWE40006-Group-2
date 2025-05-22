@@ -131,16 +131,16 @@ pipeline {
                     # Test database connection in container
                     echo "Testing database connection in container:"
                     docker-compose exec -T web python -c "
-from app import create_app, db
-from sqlalchemy import text
-app = create_app('testing')
-with app.app_context():
-    try:
-        db.session.execute(text('SELECT 1'))
-        print('✅ Database connection successful')
-    except Exception as e:
-        print('❌ Database connection failed:', e)
-" || true
+                    from app import create_app, db
+                    from sqlalchemy import text
+                    app = create_app('testing')
+                    with app.app_context():
+                        try:
+                            db.session.execute(text('SELECT 1'))
+                            print('✅ Database connection successful')
+                        except Exception as e:
+                            print('❌ Database connection failed:', e)
+                    " || true
                     
                     # Run the Docker tests
                     . venv/bin/activate && python -m pytest tests/ -v -k docker
@@ -183,7 +183,7 @@ with app.app_context():
                 //args  '-u root:root'      // so we can write files
                 }
             }
-            }
+            
             steps {
                 withCredentials([usernamePassword(
                 credentialsId: 'aws-credentials',
@@ -241,73 +241,73 @@ with app.app_context():
                     
                     # Create deployment script
                     cat > deploy.sh << 'EOF'
-#!/bin/bash
-set -e
+                    #!/bin/bash
+                    set -e
 
-DOCKER_IMAGE="$1"
-CONTAINER_NAME="student-registration-app"
+                    DOCKER_IMAGE="$1"
+                    CONTAINER_NAME="student-registration-app"
 
-echo "🚀 Starting deployment of $DOCKER_IMAGE"
+                    echo "🚀 Starting deployment of $DOCKER_IMAGE"
 
-# Get current running image for rollback
-CURRENT_IMAGE=$(docker ps --filter "name=$CONTAINER_NAME" --format "table {{.Image}}" | tail -n +2)
-echo "📋 Current image: $CURRENT_IMAGE"
+                    # Get current running image for rollback
+                    CURRENT_IMAGE=$(docker ps --filter "name=$CONTAINER_NAME" --format "table {{.Image}}" | tail -n +2)
+                    echo "📋 Current image: $CURRENT_IMAGE"
 
-# Pull new image
-echo "⬇️ Pulling new image..."
-docker pull $DOCKER_IMAGE
+                    # Pull new image
+                    echo "⬇️ Pulling new image..."
+                    docker pull $DOCKER_IMAGE
 
-# Stop and remove old container
-echo "🛑 Stopping old container..."
-docker stop $CONTAINER_NAME || true
-docker rm $CONTAINER_NAME || true
+                    # Stop and remove old container
+                    echo "🛑 Stopping old container..."
+                    docker stop $CONTAINER_NAME || true
+                    docker rm $CONTAINER_NAME || true
 
-# Start new container
-echo "🔄 Starting new container..."
-docker run -d \
-    --name $CONTAINER_NAME \
-    -p 80:5000 \
-    -e FLASK_ENV=production \
-    -e DATABASE_URL=mysql+pymysql://testuser:testpass@db:3306/testdb \
-    --network app-network \
-    $DOCKER_IMAGE
+                    # Start new container
+                    echo "🔄 Starting new container..."
+                    docker run -d \
+                        --name $CONTAINER_NAME \
+                        -p 80:5000 \
+                        -e FLASK_ENV=production \
+                        -e DATABASE_URL=mysql+pymysql://testuser:testpass@db:3306/testdb \
+                        --network app-network \
+                        $DOCKER_IMAGE
 
-# Wait for container to start
-sleep 10
+                    # Wait for container to start
+                    sleep 10
 
-# Health check
-echo "🏥 Performing health check..."
-HEALTH_CHECK=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/ || echo "000")
+                    # Health check
+                    echo "🏥 Performing health check..."
+                    HEALTH_CHECK=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/ || echo "000")
 
-if [ "$HEALTH_CHECK" = "200" ]; then
-    echo "✅ Health check passed! Deployment successful."
-    echo "🗑️ Cleaning up old images..."
-    docker image prune -f
-    exit 0
-else
-    echo "❌ Health check failed! Rolling back..."
-    
-    # Stop failed container
-    docker stop $CONTAINER_NAME || true
-    docker rm $CONTAINER_NAME || true
-    
-    # Rollback to previous image
-    if [ -n "$CURRENT_IMAGE" ] && [ "$CURRENT_IMAGE" != "REPOSITORY" ]; then
-        echo "🔄 Rolling back to: $CURRENT_IMAGE"
-        docker run -d \
-            --name $CONTAINER_NAME \
-            -p 80:5000 \
-            -e FLASK_ENV=production \
-            -e DATABASE_URL=mysql+pymysql://testuser:testpass@db:3306/testdb \
-            --network app-network \
-            $CURRENT_IMAGE
-        echo "🔙 Rollback completed!"
-    else
-        echo "⚠️ No previous image available for rollback!"
-    fi
-    exit 1
-fi
-EOF
+                    if [ "$HEALTH_CHECK" = "200" ]; then
+                        echo "✅ Health check passed! Deployment successful."
+                        echo "🗑️ Cleaning up old images..."
+                        docker image prune -f
+                        exit 0
+                    else
+                        echo "❌ Health check failed! Rolling back..."
+                        
+                        # Stop failed container
+                        docker stop $CONTAINER_NAME || true
+                        docker rm $CONTAINER_NAME || true
+                        
+                        # Rollback to previous image
+                        if [ -n "$CURRENT_IMAGE" ] && [ "$CURRENT_IMAGE" != "REPOSITORY" ]; then
+                            echo "🔄 Rolling back to: $CURRENT_IMAGE"
+                            docker run -d \
+                                --name $CONTAINER_NAME \
+                                -p 80:5000 \
+                                -e FLASK_ENV=production \
+                                -e DATABASE_URL=mysql+pymysql://testuser:testpass@db:3306/testdb \
+                                --network app-network \
+                                $CURRENT_IMAGE
+                            echo "🔙 Rollback completed!"
+                        else
+                            echo "⚠️ No previous image available for rollback!"
+                        fi
+                        exit 1
+                    fi
+                    EOF
 
                     # Copy deployment script to EC2
                     echo "📤 Copying deployment script to EC2..."
