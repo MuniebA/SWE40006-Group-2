@@ -1,4 +1,4 @@
-# Enhanced main.tf with Grafana & Prometheus monitoring infrastructure (Fixed Cycle)
+# Enhanced main.tf based on your working version with monitoring
 
 terraform {
   required_version = ">= 1.12.0"
@@ -74,7 +74,7 @@ data "aws_ssm_parameter" "al2023_std" {
 # Random suffix for unique naming
 resource "random_pet" "suffix" {}
 
-# SSH Key Pair (shared between instances)
+# SSH Key Pair
 resource "tls_private_key" "ssh" {
   algorithm = "RSA"
   rsa_bits  = 4096
@@ -85,7 +85,6 @@ resource "aws_key_pair" "generated" {
   public_key = tls_private_key.ssh.public_key_openssh
 }
 
-# Save SSH private key locally for access
 resource "local_file" "private_key" {
   content         = tls_private_key.ssh.private_key_pem
   filename        = "${path.module}/tf-ec2.pem"
@@ -124,20 +123,20 @@ resource "aws_security_group" "web" {
     cidr_blocks = var.allowed_cidr
   }
 
-  # Node Exporter for Prometheus monitoring
+  # Node-exporter for monitoring
   ingress {
     description     = "Node-exporter"
     from_port       = 9100
     to_port         = 9100
     protocol        = "tcp"
-    security_groups = [aws_security_group.monitor.id]  # Only allow from monitoring instance
+    security_groups = [aws_security_group.monitor.id]
   }
 
-  # Flask app metrics endpoint (if implemented)
+  # Flask app metrics (optional)
   ingress {
     description     = "Application metrics"
-    from_port       = 8080
-    to_port         = 8080
+    from_port       = 5000
+    to_port         = 5000
     protocol        = "tcp"
     security_groups = [aws_security_group.monitor.id]
   }
@@ -155,15 +154,14 @@ resource "aws_security_group" "web" {
   }
 }
 
-# Security Group for Monitoring Infrastructure
+# Security Group for Monitoring
 resource "aws_security_group" "monitor" {
   name        = "tf-monitor-sg-${random_pet.suffix.id}"
   description = "Allow Prometheus & Grafana UI"
   vpc_id      = data.aws_vpc.default.id
 
-  # SSH access
+  # SSH
   ingress {
-    description = "SSH"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
@@ -172,20 +170,18 @@ resource "aws_security_group" "monitor" {
 
   # Grafana Web UI
   ingress {
-    description = "Grafana Web UI"
     from_port   = 3000
     to_port     = 3000
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]  # Public access to Grafana
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # Prometheus Web UI (optional, can be restricted)
+  # Prometheus Web UI
   ingress {
-    description = "Prometheus Web UI"
     from_port   = 9090
     to_port     = 9090
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]  # Public access to Prometheus
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   # Outbound rule
@@ -290,7 +286,7 @@ resource "aws_instance" "web" {
               echo "Running database migrations..."
               docker-compose exec -T web flask db upgrade || echo "No migrations to run"
 
-              # Start Node Exporter for Prometheus monitoring
+              # Start Node Exporter for monitoring
               echo "Starting Node Exporter for monitoring..."
               docker run -d \
                 --name=node-exporter \
@@ -340,7 +336,7 @@ resource "aws_instance" "web" {
   }
 }
 
-# Monitoring Instance (Prometheus + Grafana)
+# Monitoring Instance (Using your working approach)
 resource "aws_instance" "monitor" {
   ami                         = data.aws_ssm_parameter.al2023_std.value
   instance_type               = var.instance_type
@@ -354,17 +350,22 @@ resource "aws_instance" "monitor" {
     volume_type = "gp3"
   }
 
+  tags = { 
+    Name = "tf-monitor-${random_pet.suffix.id}", 
+    Environment = "production",
+    Role = "monitoring"
+  }
+
   user_data = <<-EOF
     #!/bin/bash
     set -euxo pipefail
-
+    
     # Log everything for debugging
     exec > >(tee /var/log/user-data-monitor.log)
     exec 2>&1
-
+    
     echo "=== Starting Monitoring Instance User Data Script ==="
-
-    # Update system
+    
     dnf update -y
     dnf install -y docker git curl
 
@@ -376,76 +377,60 @@ resource "aws_instance" "monitor" {
     chmod +x /usr/local/bin/docker-compose
 
     # Create monitoring stack directory
-    mkdir -p /opt/monitoring-stack/{config,data,dashboards}
-    cd /opt/monitoring-stack
-
-    # Create initial Prometheus configuration (will be updated later)
-    cat > config/prometheus.yml << PROM_EOF
+    mkdir -p /opt/prom-stack/provisioning/{datasources,dashboards}
+    mkdir -p /var/lib/grafana/dashboards
+    
+    # Create Prometheus configuration with web instance target
+    cat > /opt/prom-stack/prometheus.yml <<PROM
     global:
       scrape_interval: 15s
       evaluation_interval: 15s
-
     scrape_configs:
+      # Node Exporter from web instance
+      - job_name: node_exporter_web
+        static_configs:
+          - targets: ['${aws_instance.web.private_ip}:9100']
+        scrape_interval: 15s
+        metrics_path: /metrics
+      
+      # Flask application metrics (if available)
+      - job_name: flask_app
+        static_configs:
+          - targets: ['${aws_instance.web.private_ip}:5000']
+        scrape_interval: 30s
+        metrics_path: /metrics
+        scrape_timeout: 10s
+      
       # Self-monitoring
-      - job_name: 'prometheus'
+      - job_name: prometheus
         static_configs:
           - targets: ['localhost:9090']
-
+      
       # Monitor the monitoring instance itself
-      - job_name: 'monitoring-node'
+      - job_name: monitoring_node
         static_configs:
           - targets: ['localhost:9100']
-    PROM_EOF
+    PROM
 
-    # Create Grafana provisioning for datasources
-    mkdir -p config/grafana/provisioning/{datasources,dashboards}
-
-    cat > config/grafana/provisioning/datasources/prometheus.yml << DS_EOF
-    apiVersion: 1
-    datasources:
-      - name: Prometheus
-        type: prometheus
-        access: proxy
-        url: http://prometheus:9090
-        isDefault: true
-        jsonData:
-          timeInterval: 5s
-    DS_EOF
-
-    # Create dashboard provisioning
-    cat > config/grafana/provisioning/dashboards/default.yml << DB_EOF
-    apiVersion: 1
-    providers:
-      - name: 'default'
-        type: file
-        updateIntervalSeconds: 30
-        options:
-          path: /var/lib/grafana/dashboards
-    DB_EOF
-
-    # Download Node Exporter dashboard
-    curl -sL https://grafana.com/api/dashboards/1860/revisions/32/download -o dashboards/node-exporter-full.json
-
-    # Create Docker Compose for monitoring stack
-    cat > docker-compose.yml << COMPOSE_EOF
-    version: '3.8'
-
+    # Create Docker Compose file
+    cat > /opt/prom-stack/docker-compose.yml <<'COMPOSE'
+    version: "3.8"
     services:
       prometheus:
         image: prom/prometheus:latest
         container_name: prometheus
-        ports:
-          - "9090:9090"
         volumes:
-          - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+          - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
           - prometheus-data:/prometheus
         command:
-          - '--config.file=/etc/prometheus/prometheus.yml'
-          - '--storage.tsdb.path=/prometheus'
-          - '--web.console.libraries=/etc/prometheus/console_libraries'
-          - '--web.console.templates=/etc/prometheus/consoles'
-          - '--storage.tsdb.retention.time=200h'
-          - '--web.enable-lifecycle'
+          - "--config.file=/etc/prometheus/prometheus.yml"
+          - "--storage.tsdb.path=/prometheus"
+          - "--web.console.libraries=/etc/prometheus/console_libraries"
+          - "--web.console.templates=/etc/prometheus/consoles"
+          - "--storage.tsdb.retention.time=200h"
+          - "--web.enable-lifecycle"
+        ports:
+          - "9090:9090"
         restart: unless-stopped
 
       grafana:
@@ -459,8 +444,7 @@ resource "aws_instance" "monitor" {
           - GF_SECURITY_ADMIN_USER=admin
         volumes:
           - grafana-data:/var/lib/grafana
-          - ./config/grafana/provisioning:/etc/grafana/provisioning
-          - ./dashboards:/var/lib/grafana/dashboards
+          - ./provisioning:/etc/grafana/provisioning
         restart: unless-stopped
 
       node-exporter:
@@ -482,85 +466,49 @@ resource "aws_instance" "monitor" {
     volumes:
       prometheus-data:
       grafana-data:
-    COMPOSE_EOF
+    COMPOSE
 
+    # Create Grafana provisioning
+    cat > /opt/prom-stack/provisioning/datasources/ds.yml <<'DS'
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus:9090
+        isDefault: true
+        jsonData:
+          timeInterval: 5s
+    DS
+
+    cat > /opt/prom-stack/provisioning/dashboards/node.yml <<'DB'
+    apiVersion: 1
+    providers:
+      - name: Default
+        type: file
+        updateIntervalSeconds: 30
+        options:
+          path: /var/lib/grafana/dashboards
+    DB
+    
+    # Download Node Exporter dashboard
+    curl -sL https://grafana.com/api/dashboards/1860/revisions/32/download -o /var/lib/grafana/dashboards/node-exporter-full.json
+    
     # Set proper permissions
-    chown -R ec2-user:ec2-user /opt/monitoring-stack
+    chown -R ec2-user:ec2-user /opt/prom-stack
 
     # Start the monitoring stack
-    echo "Starting Prometheus and Grafana..."
+    cd /opt/prom-stack
     docker-compose up -d
-
+    
     # Wait for services to start
-    echo "Waiting for services to start..."
     sleep 30
-
+    
     echo "=== Monitoring Instance Setup Complete ==="
   EOF
-
-  tags = {
-    Name        = "tf-monitor-${random_pet.suffix.id}"
-    Environment = "production"
-    Role        = "monitoring"
-  }
 }
 
-# Configuration script to link monitoring and web instances
-resource "null_resource" "configure_monitoring" {
-  depends_on = [aws_instance.web, aws_instance.monitor]
-
-  provisioner "local-exec" {
-    command = <<-EOT
-      # Wait for instances to be ready
-      sleep 60
-      
-      # Update Prometheus configuration to include web instance
-      ssh -i ${local_file.private_key.filename} -o StrictHostKeyChecking=no ec2-user@${aws_instance.monitor.public_ip} '
-        cd /opt/monitoring-stack
-        
-        # Update Prometheus config to include web instance
-        cat > config/prometheus.yml << PROM_EOF
-global:
-  scrape_interval: 15s
-  evaluation_interval: 15s
-
-scrape_configs:
-  # Node Exporter from web instance
-  - job_name: "node-exporter-web"
-    static_configs:
-      - targets: ["${aws_instance.web.private_ip}:9100"]
-    scrape_interval: 15s
-    metrics_path: /metrics
-
-  # Flask application metrics (if available)
-  - job_name: "flask-app"
-    static_configs:
-      - targets: ["${aws_instance.web.private_ip}:5000"]
-    scrape_interval: 30s
-    metrics_path: /metrics
-    scrape_timeout: 10s
-
-  # Self-monitoring
-  - job_name: "prometheus"
-    static_configs:
-      - targets: ["localhost:9090"]
-
-  # Monitor the monitoring instance itself
-  - job_name: "monitoring-node"
-    static_configs:
-      - targets: ["localhost:9100"]
-PROM_EOF
-        
-        # Reload Prometheus configuration
-        docker-compose restart prometheus
-        
-        echo "Prometheus configuration updated with web instance targets"
-      '
-    EOT
-  }
-}
-
-# Save SSH connection info for Jenkins
+# Create SSH config file for easy access
 resource "local_file" "ssh_config" {
   content = <<-EOT
 # SSH Configuration for AWS Instances
@@ -579,14 +527,6 @@ Host monitor
     IdentityFile ${path.module}/tf-ec2.pem
     StrictHostKeyChecking no
     UserKnownHostsFile /dev/null
-
-# Direct connection examples:
-# ssh -F ssh_config web
-# ssh -F ssh_config monitor
-#
-# Or use direct commands:
-# ssh -i ${path.module}/tf-ec2.pem ec2-user@${aws_instance.web.public_ip}
-# ssh -i ${path.module}/tf-ec2.pem ec2-user@${aws_instance.monitor.public_ip}
   EOT
   filename = "${path.module}/ssh_config"
   file_permission = "0600"
