@@ -178,7 +178,8 @@ pipeline {
         
         stage('Provision Infrastructure with Terraform') {
             agent {
-                docker {
+                dockerContainer {
+                    
                 image 'hashicorp/terraform:1.10.0'
                 //args  '-u root:root'      // so we can write files
                 }
