@@ -177,14 +177,6 @@ pipeline {
         }
         
         stage('Provision Infrastructure with Terraform') {
-            agent {
-                dockerContainer {
-                    
-                image 'hashicorp/terraform:1.12.0'
-                //args  "-u root:root -v $WORKSPACE:/workspace"
-                remoteFs '/workspace'      // so we can write files
-                }
-            }
             
             steps {
                 withCredentials([usernamePassword(
