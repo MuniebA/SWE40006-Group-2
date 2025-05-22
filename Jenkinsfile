@@ -177,7 +177,7 @@ with app.app_context():
         }
         stage('Provision Infrastructure with Terraform') {
             steps {
-                dir('terraform') { // if your Terraform files are in a subdirectory
+                 { // if your Terraform files are in a subdirectory
                     withCredentials([[
                         $class: 'AmazonWebServicesCredentialsBinding',
                         credentialsId: 'aws-credentials'
