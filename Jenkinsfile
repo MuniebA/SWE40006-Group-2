@@ -177,6 +177,13 @@ with app.app_context():
         }
         
         stage('Provision Infrastructure with Terraform') {
+            agent {
+                docker {
+                image 'hashicorp/terraform:1.12.0'
+                args  '-u root:root'      // so we can write files
+                }
+            }
+            }
             steps {
                 withCredentials([usernamePassword(
                 credentialsId: 'aws-credentials',
