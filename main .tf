@@ -1,4 +1,4 @@
-# Enhanced main.tf with Grafana & Prometheus monitoring infrastructure
+# Enhanced main.tf with Grafana & Prometheus monitoring infrastructure (Fixed Cycle)
 
 terraform {
   required_version = ">= 1.12.0"
@@ -89,18 +89,6 @@ resource "aws_key_pair" "generated" {
 resource "local_file" "private_key" {
   content         = tls_private_key.ssh.private_key_pem
   filename        = "${path.module}/tf-ec2.pem"
-  file_permission = "0600"
-}
-
-# Save SSH connection info for Jenkins
-resource "local_file" "ssh_config" {
-  content = templatefile("${path.module}/ssh_config.tpl", {
-    web_ip = aws_instance.web.public_ip
-    monitor_ip = aws_instance.monitor.public_ip
-    key_file = "${path.module}/tf-ec2.pem"
-    user = "ec2-user"
-  })
-  filename = "${path.module}/ssh_config"
   file_permission = "0600"
 }
 
@@ -227,10 +215,122 @@ resource "aws_instance" "web" {
     volume_type = "gp3"
   }
 
-  user_data = templatefile("${path.module}/user_data_web.sh", {
-    docker_image_tag = var.docker_image_tag
-    monitor_ip = aws_instance.monitor.private_ip
-  })
+  user_data = <<-EOF
+              #!/bin/bash
+              set -euxo pipefail
+
+              # Log everything for debugging
+              exec > >(tee /var/log/user-data.log)
+              exec 2>&1
+
+              echo "=== Starting Web Instance User Data Script ==="
+              echo "Docker image tag: ${var.docker_image_tag}"
+
+              # Update system
+              yum update -y
+              dnf install -y docker git mysql
+
+              # Start Docker
+              systemctl enable --now docker
+
+              # Install docker-compose
+              curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+              chmod +x /usr/local/bin/docker-compose
+
+              # Add ec2-user to docker group
+              usermod -aG docker ec2-user
+
+              # Clone repository
+              cd /home/ec2-user
+              if [ -d "app" ]; then
+                  cd app
+                  git pull origin main
+                  cd ..
+              else
+                  git clone https://github.com/MuniebA/SWE40006-Group-2.git app
+              fi
+
+              cd app
+              chown -R ec2-user:ec2-user /home/ec2-user/app
+
+              # Create environment file
+              cat > .env << ENVEOF
+              FLASK_APP=run.py
+              FLASK_ENV=production
+              SECRET_KEY=production-secret-key-change-this
+              DATABASE_URL=mysql+pymysql://root:rootpassword@db:3306/testdb
+              ENVEOF
+
+              # Update docker-compose.yml to use specific image tag if not latest
+              if [ "${var.docker_image_tag}" != "latest" ]; then
+                  sed -i "s|munieb/student-registration:latest|munieb/student-registration:${var.docker_image_tag}|g" docker-compose.yml
+              fi
+
+              # Pull the latest images
+              docker-compose pull
+
+              # Start containers
+              docker-compose up -d
+
+              # Wait for database to be ready
+              echo "Waiting for database to be ready..."
+              sleep 30
+
+              # Initialize database and run migrations
+              echo "Initializing database..."
+              docker-compose exec -T web python -c "
+              from app import create_app, db
+              app = create_app('production')
+              with app.app_context():
+                  db.create_all()
+                  print('Database initialized successfully')
+              " || echo "Database initialization failed"
+
+              # Run database migrations if they exist
+              echo "Running database migrations..."
+              docker-compose exec -T web flask db upgrade || echo "No migrations to run"
+
+              # Start Node Exporter for Prometheus monitoring
+              echo "Starting Node Exporter for monitoring..."
+              docker run -d \
+                --name=node-exporter \
+                --restart=always \
+                --net=host \
+                --pid=host \
+                -v /:/host:ro,rslave \
+                quay.io/prometheus/node-exporter:latest \
+                --path.rootfs=/host
+
+              # Create health check script
+              cat > /home/ec2-user/health_check.sh << 'HEALTH_EOF'
+              #!/bin/bash
+              echo "=== Application Health Check ==="
+              echo "Timestamp: $(date)"
+
+              # Check if containers are running
+              echo "Docker containers status:"
+              docker-compose ps
+
+              # Check application response
+              echo "Testing application response:"
+              if curl -f -s http://localhost/ > /dev/null; then
+                  echo "✅ Web application is responding"
+              else
+                  echo "❌ Web application is not responding"
+                  echo "Container logs:"
+                  docker-compose logs --tail=20
+              fi
+              HEALTH_EOF
+
+              chmod +x /home/ec2-user/health_check.sh
+              chown ec2-user:ec2-user /home/ec2-user/health_check.sh
+
+              # Run initial health check
+              sleep 10
+              /home/ec2-user/health_check.sh
+
+              echo "=== Web Instance User Data Script Completed ==="
+        EOF
 
   tags = {
     Name        = "tf-docker-web-${var.docker_image_tag}"
@@ -254,15 +354,242 @@ resource "aws_instance" "monitor" {
     volume_type = "gp3"
   }
 
-  user_data = templatefile("${path.module}/user_data_monitor.sh", {
-    web_instance_ip = aws_instance.web.private_ip
-  })
+  user_data = <<-EOF
+    #!/bin/bash
+    set -euxo pipefail
+
+    # Log everything for debugging
+    exec > >(tee /var/log/user-data-monitor.log)
+    exec 2>&1
+
+    echo "=== Starting Monitoring Instance User Data Script ==="
+
+    # Update system
+    dnf update -y
+    dnf install -y docker git curl
+
+    # Start Docker
+    systemctl enable --now docker
+
+    # Install Docker Compose
+    curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+    chmod +x /usr/local/bin/docker-compose
+
+    # Create monitoring stack directory
+    mkdir -p /opt/monitoring-stack/{config,data,dashboards}
+    cd /opt/monitoring-stack
+
+    # Create initial Prometheus configuration (will be updated later)
+    cat > config/prometheus.yml << PROM_EOF
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+
+    scrape_configs:
+      # Self-monitoring
+      - job_name: 'prometheus'
+        static_configs:
+          - targets: ['localhost:9090']
+
+      # Monitor the monitoring instance itself
+      - job_name: 'monitoring-node'
+        static_configs:
+          - targets: ['localhost:9100']
+    PROM_EOF
+
+    # Create Grafana provisioning for datasources
+    mkdir -p config/grafana/provisioning/{datasources,dashboards}
+
+    cat > config/grafana/provisioning/datasources/prometheus.yml << DS_EOF
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus:9090
+        isDefault: true
+        jsonData:
+          timeInterval: 5s
+    DS_EOF
+
+    # Create dashboard provisioning
+    cat > config/grafana/provisioning/dashboards/default.yml << DB_EOF
+    apiVersion: 1
+    providers:
+      - name: 'default'
+        type: file
+        updateIntervalSeconds: 30
+        options:
+          path: /var/lib/grafana/dashboards
+    DB_EOF
+
+    # Download Node Exporter dashboard
+    curl -sL https://grafana.com/api/dashboards/1860/revisions/32/download -o dashboards/node-exporter-full.json
+
+    # Create Docker Compose for monitoring stack
+    cat > docker-compose.yml << COMPOSE_EOF
+    version: '3.8'
+
+    services:
+      prometheus:
+        image: prom/prometheus:latest
+        container_name: prometheus
+        ports:
+          - "9090:9090"
+        volumes:
+          - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+          - prometheus-data:/prometheus
+        command:
+          - '--config.file=/etc/prometheus/prometheus.yml'
+          - '--storage.tsdb.path=/prometheus'
+          - '--web.console.libraries=/etc/prometheus/console_libraries'
+          - '--web.console.templates=/etc/prometheus/consoles'
+          - '--storage.tsdb.retention.time=200h'
+          - '--web.enable-lifecycle'
+        restart: unless-stopped
+
+      grafana:
+        image: grafana/grafana:latest
+        container_name: grafana
+        ports:
+          - "3000:3000"
+        environment:
+          - GF_SECURITY_ADMIN_PASSWORD=admin
+          - GF_USERS_ALLOW_SIGN_UP=false
+          - GF_SECURITY_ADMIN_USER=admin
+        volumes:
+          - grafana-data:/var/lib/grafana
+          - ./config/grafana/provisioning:/etc/grafana/provisioning
+          - ./dashboards:/var/lib/grafana/dashboards
+        restart: unless-stopped
+
+      node-exporter:
+        image: quay.io/prometheus/node-exporter:latest
+        container_name: node-exporter-monitoring
+        ports:
+          - "9100:9100"
+        volumes:
+          - /proc:/host/proc:ro
+          - /sys:/host/sys:ro
+          - /:/rootfs:ro
+        command:
+          - '--path.procfs=/host/proc'
+          - '--path.rootfs=/rootfs'
+          - '--path.sysfs=/host/sys'
+          - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+        restart: unless-stopped
+
+    volumes:
+      prometheus-data:
+      grafana-data:
+    COMPOSE_EOF
+
+    # Set proper permissions
+    chown -R ec2-user:ec2-user /opt/monitoring-stack
+
+    # Start the monitoring stack
+    echo "Starting Prometheus and Grafana..."
+    docker-compose up -d
+
+    # Wait for services to start
+    echo "Waiting for services to start..."
+    sleep 30
+
+    echo "=== Monitoring Instance Setup Complete ==="
+  EOF
 
   tags = {
     Name        = "tf-monitor-${random_pet.suffix.id}"
     Environment = "production"
     Role        = "monitoring"
   }
+}
+
+# Configuration script to link monitoring and web instances
+resource "null_resource" "configure_monitoring" {
+  depends_on = [aws_instance.web, aws_instance.monitor]
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      # Wait for instances to be ready
+      sleep 60
+      
+      # Update Prometheus configuration to include web instance
+      ssh -i ${local_file.private_key.filename} -o StrictHostKeyChecking=no ec2-user@${aws_instance.monitor.public_ip} '
+        cd /opt/monitoring-stack
+        
+        # Update Prometheus config to include web instance
+        cat > config/prometheus.yml << PROM_EOF
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Node Exporter from web instance
+  - job_name: "node-exporter-web"
+    static_configs:
+      - targets: ["${aws_instance.web.private_ip}:9100"]
+    scrape_interval: 15s
+    metrics_path: /metrics
+
+  # Flask application metrics (if available)
+  - job_name: "flask-app"
+    static_configs:
+      - targets: ["${aws_instance.web.private_ip}:5000"]
+    scrape_interval: 30s
+    metrics_path: /metrics
+    scrape_timeout: 10s
+
+  # Self-monitoring
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Monitor the monitoring instance itself
+  - job_name: "monitoring-node"
+    static_configs:
+      - targets: ["localhost:9100"]
+PROM_EOF
+        
+        # Reload Prometheus configuration
+        docker-compose restart prometheus
+        
+        echo "Prometheus configuration updated with web instance targets"
+      '
+    EOT
+  }
+}
+
+# Save SSH connection info for Jenkins
+resource "local_file" "ssh_config" {
+  content = <<-EOT
+# SSH Configuration for AWS Instances
+# Usage: ssh -F ssh_config web OR ssh -F ssh_config monitor
+
+Host web
+    HostName ${aws_instance.web.public_ip}
+    User ec2-user
+    IdentityFile ${path.module}/tf-ec2.pem
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+
+Host monitor
+    HostName ${aws_instance.monitor.public_ip}
+    User ec2-user
+    IdentityFile ${path.module}/tf-ec2.pem
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+
+# Direct connection examples:
+# ssh -F ssh_config web
+# ssh -F ssh_config monitor
+#
+# Or use direct commands:
+# ssh -i ${path.module}/tf-ec2.pem ec2-user@${aws_instance.web.public_ip}
+# ssh -i ${path.module}/tf-ec2.pem ec2-user@${aws_instance.monitor.public_ip}
+  EOT
+  filename = "${path.module}/ssh_config"
+  file_permission = "0600"
 }
 
 # Outputs
