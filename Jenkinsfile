@@ -181,8 +181,8 @@ pipeline {
                 dockerContainer {
                     
                 image 'hashicorp/terraform:1.12.0'
-                args  "-u root:root -v $WORKSPACE:/workspace"
-                workingDir '/workspace'      // so we can write files
+                //args  "-u root:root -v $WORKSPACE:/workspace"
+                remoteFs '/workspace'      // so we can write files
                 }
             }
             
@@ -199,6 +199,8 @@ pipeline {
                         export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
                         export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
                         export AWS_DEFAULT_REGION=ap-southeast-1
+                        echo "🔍 Working directory: $(pwd)"
+                        echo "📦 Initializing Terraform..."
                         echo "📦 Initializing Terraform..."
                         terraform init -input=false
 
