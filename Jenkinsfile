@@ -221,26 +221,26 @@ pipeline {
                     cd ${WORKSPACE}/terraform
                     
                     # Use Python to download and extract Terraform
-                    python3 -c '
+                    python3 -c "
 import urllib.request
 import zipfile
 import os
 import sys
 
-version = os.environ.get("TERRAFORM_VERSION", "1.7.4")
-url = f"https://releases.hashicorp.com/terraform/{version}/terraform_{version}_linux_amd64.zip"
-zip_path = "terraform.zip"
+version = os.environ.get('TERRAFORM_VERSION', '1.7.4')
+url = f'https://releases.hashicorp.com/terraform/{version}/terraform_{version}_linux_amd64.zip'
+zip_path = 'terraform.zip'
 
-print(f"Downloading Terraform {version}...")
+print(f'Downloading Terraform {version}...')
 urllib.request.urlretrieve(url, zip_path)
 
-print("Extracting Terraform binary...")
-with zipfile.ZipFile(zip_path, "r") as zip_ref:
-    zip_ref.extractall(".")
+print('Extracting Terraform binary...')
+with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+    zip_ref.extractall('.')
 
-os.chmod("terraform", 0o755)
-print("Terraform installed successfully!")
-'
+os.chmod('terraform', 0o755)
+print('Terraform installed successfully!')
+"
                     
                     # Add to PATH for this session
                     export PATH=${WORKSPACE}/terraform:$PATH
@@ -396,9 +396,9 @@ print("Terraform installed successfully!")
                             
                             # Test if Prometheus can scrape web instance metrics
                             echo "Testing Prometheus metrics collection..."
-                            sleep 30  # Wait for first scrape
+                            sleep 30
                             
-                            if curl -s "http://$MONITOR_IP:9090/api/v1/query?query=up" | grep -q '"value":\[.*,"1"\]'; then
+                            if curl -s "http://$MONITOR_IP:9090/api/v1/query?query=up" | grep -q '"value":[.*,"1"]'; then
                                 echo "✅ Prometheus is successfully collecting metrics!"
                             else
                                 echo "⚠️ Prometheus metrics collection needs time to stabilize"
@@ -513,19 +513,17 @@ print("Terraform installed successfully!")
         }
         
         success {
-            echo '''
-            🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉
-            🎉                                          🎉
-            🎉     CONTINUOUS DEPLOYMENT SUCCESSFUL!     🎉
-            🎉                                          🎉
-            🎉  ✅ Tests Passed                          🎉
-            🎉  ✅ Docker Image Built & Pushed          🎉
-            🎉  ✅ Infrastructure Deployed               🎉
-            🎉  ✅ Web Application Running               🎉
-            🎉  ✅ Monitoring Stack Active               🎉
-            🎉                                          🎉
-            🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉
-            '''
+            echo '🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉'
+            echo '🎉                                          🎉'
+            echo '🎉     CONTINUOUS DEPLOYMENT SUCCESSFUL!     🎉'
+            echo '🎉                                          🎉'
+            echo '🎉  ✅ Tests Passed                          🎉'
+            echo '🎉  ✅ Docker Image Built & Pushed          🎉'
+            echo '🎉  ✅ Infrastructure Deployed               🎉'
+            echo '🎉  ✅ Web Application Running               🎉'
+            echo '🎉  ✅ Monitoring Stack Active               🎉'
+            echo '🎉                                          🎉'
+            echo '🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉'
         }
     }
 }
