@@ -21,7 +21,6 @@ terraform {
   }
 }
 
-
 provider "aws" {
   region = var.aws_region
   # Credentials are picked up automatically from one of:
@@ -29,7 +28,6 @@ provider "aws" {
   # • AWS shared‑credentials file (~/.aws/credentials)
   # • IAM role if running in CI or on an EC2 instance with an instance‑profile
 }
-
 
 variable "aws_region" {
   description = "AWS region to deploy into"
@@ -49,8 +47,6 @@ variable "allowed_cidr" {
   default     = ["0.0.0.0/0"]
 }
 
-
-
 data "aws_vpc" "default" {
   default = true
 }
@@ -62,7 +58,6 @@ data "aws_subnets" "default" {
   }
 }
 
-
 # Grab the latest Amazon Linux 2023 AMI (x86_64) in the chosen region.
 data "aws_ami" "al2023" {
   most_recent = true
@@ -72,7 +67,6 @@ data "aws_ami" "al2023" {
     values = ["al2023-ami-*-x86_64"]
   }
 }
-
 
 resource "aws_security_group" "web" {
   name   = "tf-web-sg-${random_pet.suffix.id}"
@@ -105,14 +99,14 @@ resource "aws_security_group" "web" {
     cidr_blocks = var.allowed_cidr
   }
 
+  # Node-exporter for monitoring
   ingress {
-  description = "Node-exporter"
-  from_port   = 9100
-  to_port     = 9100
-  protocol    = "tcp"
-  security_groups = [aws_security_group.monitor.id]  # safer than 0.0.0.0/0
-}
-
+    description     = "Node-exporter"
+    from_port       = 9100
+    to_port         = 9100
+    protocol        = "tcp"
+    security_groups = [aws_security_group.monitor.id]
+  }
 
   # Default egress (all traffic out)
   egress {
@@ -158,24 +152,30 @@ resource "aws_instance" "web" {
   key_name                    = aws_key_pair.generated.key_name
 
   root_block_device {
-    volume_size = 8 # Adjust as needed; must be >= minimal AMI's snapshot size
+    volume_size = 20 # Increased for Docker images and application data
     volume_type = "gp3"
   }
 
-  # Installs & starts Docker at first boot
+  # Enhanced user_data for CI/CD deployment support
   user_data = <<-EOF
               #!/bin/bash
               set -euxo pipefail
 
+              # Update system
               yum update -y
-              dnf install -y docker git
+              dnf install -y docker git curl
+
+              # Enable and start Docker
               systemctl enable --now docker
+
+              # Add ec2-user to docker group
+              usermod -aG docker ec2-user
 
               # Install docker-compose
               curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
               chmod +x /usr/local/bin/docker-compose
 
-              # Create docker network for the application
+              # Create Docker network for the application
               docker network create app-network || true
 
               # Start MySQL container for production
@@ -190,14 +190,21 @@ resource "aws_instance" "web" {
                 -v mysql-data:/var/lib/mysql \
                 mysql:8.0
 
-              # Wait for MySQL to be ready
-              sleep 30
+              # Wait for MySQL to initialize
+              sleep 60
 
-              # Initialize database with your schema
-              # (This will be done by the application on first run)
+              # Initialize database with schema
+              # Note: This will be handled by the application deployment later
 
-              # Create initial student-registration container
-              # This will be replaced by Jenkins deployments
+              # Install node-exporter for monitoring
+              docker run -d \
+                --name=node-exporter \
+                --restart=always \
+                --net=host \
+                quay.io/prometheus/node-exporter:latest
+
+              # Create a placeholder for the application container
+              # This will be replaced by Jenkins CI/CD
               docker run -d \
                 --name student-registration-app \
                 --network app-network \
@@ -205,82 +212,59 @@ resource "aws_instance" "web" {
                 -p 80:5000 \
                 -e FLASK_ENV=production \
                 -e DATABASE_URL=mysql+pymysql://testuser:testpass@mysql-prod:3306/testdb \
-                munieb/student-registration:latest || echo "Initial image not available, will be deployed via CI/CD"
-
-              # Ensure ec2-user can manage Docker
-              usermod -aG docker ec2-user
+                munieb/student-registration:latest || echo "Initial image will be deployed via CI/CD"
 
               echo "🚀 EC2 instance ready for CI/CD deployments!"
         EOF
 
-
-
-
   tags = {
     Name        = "tf-docker-web"
-    Environment = "demo"
+    Environment = "production"
+    Project     = "student-registration-system"
   }
 }
-
-
-output "ec2_public_ip" {
-  value       = aws_instance.web.public_ip
-  description = "Public IPv4 address of the EC2 instance"
-}
-
-output "ec2_public_dns" {
-  value       = aws_instance.web.public_dns
-  description = "Public DNS name (useful for browser test)"
-}
-
-output "ec2_instance_id" {
-  value       = aws_instance.web.id
-  description = "EC2 Instance ID"
-}
-
-output "private_key_content" {
-  value     = tls_private_key.ssh.private_key_pem
-  sensitive = true
-  description = "Private key for SSH access to EC2"
-}
-
 
 resource "aws_security_group" "monitor" {
   name        = "tf-monitor-sg-${random_pet.suffix.id}"
   description = "Allow Prometheus & Grafana UI"
   vpc_id      = data.aws_vpc.default.id
 
-  # -------- Inbound rules --------
+  # SSH
   ingress {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] # SSH
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
+  # Grafana
   ingress {
     from_port   = 3000
     to_port     = 3000
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] # Grafana
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
+  # Prometheus UI
   ingress {
     from_port   = 9090
     to_port     = 9090
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] # Prometheus UI (optional)
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # -------- Outbound rule --------
+  # Outbound
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
-}
 
+  tags = {
+    Name = "monitor-sg"
+  }
+}
 
 data "aws_ssm_parameter" "al2023_std" {
   name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
@@ -294,7 +278,16 @@ resource "aws_instance" "monitor" {
   associate_public_ip_address = true
   key_name                    = aws_key_pair.generated.key_name
 
-  tags = { Name = "tf-monitor", Environment = "demo" }
+  root_block_device {
+    volume_size = 15
+    volume_type = "gp3"
+  }
+
+  tags = { 
+    Name = "tf-monitor"
+    Environment = "production"
+    Project = "student-registration-system"
+  }
 
   user_data = <<-EOF
     #!/bin/bash
@@ -303,82 +296,93 @@ resource "aws_instance" "monitor" {
     dnf install -y docker git
     systemctl enable --now docker
 
-    # Install Docker Compose v1 plugin (Amazon Linux 2023)
-    # mkdir -p /usr/libexec/docker/cli-plugins
-    sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" \
+    # Install Docker Compose
+    curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" \
     -o /usr/local/bin/docker-compose
-    sudo chmod +x /usr/local/bin/docker-compose
+    chmod +x /usr/local/bin/docker-compose
 
-    # --- Prometheus + Grafana stack ---
+    # Prometheus + Grafana stack
     mkdir -p /opt/prom-stack/provisioning/{datasources,dashboards}
     mkdir -p /var/lib/grafana/dashboards
     
     cat > /opt/prom-stack/prometheus.yml <<PROM
-    global:
-      scrape_interval: 15s
-    scrape_configs:
-      - job_name: node_exporter
-        static_configs:
-          - targets: ['${aws_instance.web.private_ip}:9100']
-    PROM
+global:
+  scrape_interval: 15s
+scrape_configs:
+  - job_name: node_exporter
+    static_configs:
+      - targets: ['${aws_instance.web.private_ip}:9100']
+  - job_name: student_app
+    static_configs:
+      - targets: ['${aws_instance.web.private_ip}:80']
+    metrics_path: /metrics
+PROM
 
     cat > /opt/prom-stack/docker-compose.yml <<'COMPOSE'
-    version: "3.8"
-    services:
-      prometheus:
-        image: prom/prometheus:latest
-        volumes:
-          - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
-        command:
-          - "--config.file=/etc/prometheus/prometheus.yml"
-        ports:
-          - "9090:9090"
-
-      grafana:
-        image: grafana/grafana:latest
-        ports:
-          - "3000:3000"
-        environment:
-          - GF_SECURITY_ADMIN_PASSWORD=admin #GF_SECURITY_ADMIN_PASSWORD=$${GRAFANA_ADMIN_PASSWORD:-ChangeMe!}
-        volumes:
-          - grafana-data:/var/lib/grafana
-          - ./provisioning:/etc/grafana/provisioning
-
+version: "3.8"
+services:
+  prometheus:
+    image: prom/prometheus:latest
     volumes:
-      grafana-data:
-    COMPOSE
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/etc/prometheus/console_libraries"
+      - "--web.console.templates=/etc/prometheus/consoles"
+      - "--storage.tsdb.retention.time=200h"
+      - "--web.enable-lifecycle"
+    ports:
+      - "9090:9090"
+    restart: always
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./provisioning:/etc/grafana/provisioning
+    restart: always
+
+volumes:
+  grafana-data:
+COMPOSE
 
     cat > /opt/prom-stack/provisioning/datasources/ds.yml <<'DS'
-    apiVersion: 1
-    datasources:
-      - name: Prometheus
-        type: prometheus
-        access: proxy
-        url: http://prometheus:9090
-        isDefault: true
-    DS
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+DS
 
     cat > /opt/prom-stack/provisioning/dashboards/node.yml <<'DB'
-    apiVersion: 1
-    providers:
-      - name: Default
-        type: file
-        updateIntervalSeconds: 30
-        options:
-          path: /var/lib/grafana/dashboards
-    DB
-
+apiVersion: 1
+providers:
+  - name: Default
+    type: file
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+DB
     
+    # Download node exporter dashboard
     curl -sL https://grafana.com/api/dashboards/1860/revisions/32/download \
       -o /var/lib/grafana/dashboards/node-exporter-full.json
 
     cd /opt/prom-stack
-    sudo docker-compose up -d
-
-
-    
+    docker-compose up -d
   EOF
 }
+
+# ============================================================================
+# OUTPUTS - Essential for CI/CD Integration
+# ============================================================================
 
 output "ec2_public_ip" {
   value       = aws_instance.web.public_ip
@@ -387,85 +391,63 @@ output "ec2_public_ip" {
 
 output "ec2_public_dns" {
   value       = aws_instance.web.public_dns
-  description = "Public DNS name (useful for browser test)"
+  description = "Public DNS name of the EC2 instance"
 }
 
-# NEW: Output for CI/CD pipeline
-output "ssh_connection_command" {
-  value       = "ssh -i tf-ec2.pem ec2-user@${aws_instance.web.public_ip}"
-  description = "SSH command to connect to the EC2 instance"
+output "ec2_instance_id" {
+  value       = aws_instance.web.id
+  description = "EC2 Instance ID"
 }
 
-output "application_url" {
-  value       = "http://${aws_instance.web.public_ip}/"
-  description = "Direct URL to access the deployed application"
+output "ec2_private_ip" {
+  value       = aws_instance.web.private_ip
+  description = "Private IP address of the EC2 instance"
+}
+
+output "private_key_content" {
+  value       = tls_private_key.ssh.private_key_pem
+  sensitive   = true
+  description = "Private key for SSH access to EC2 (sensitive)"
+}
+
+output "key_pair_name" {
+  value       = aws_key_pair.generated.key_name
+  description = "Name of the generated key pair"
 }
 
 output "grafana_url" {
-  description = "Login Grafana with admin / admin"
+  description = "Grafana dashboard URL (admin/admin)"
   value       = "http://${aws_instance.monitor.public_ip}:3000"
 }
 
 output "prometheus_url" {
-  value = "http://${aws_instance.monitor.public_ip}:9090"
-  description = "Prometheus monitoring interface"
+  value       = "http://${aws_instance.monitor.public_ip}:9090"
+  description = "Prometheus UI URL"
 }
 
-# NEW: CI/CD Setup Instructions
-output "cicd_setup_instructions" {
-  value = <<-EOT
-    =======================================================
-    CI/CD SETUP INSTRUCTIONS
-    =======================================================
-    
-    1. JENKINS CREDENTIALS SETUP:
-       - Add 'ec2-public-ip' secret: ${aws_instance.web.public_ip}
-       - Add 'ec2-ssh-private-key' with content from: tf-ec2.pem
-       - Ensure docker-hub-credentials and aws-credentials are configured
-    
-    2. PREPARE EC2 FOR CI/CD:
-       SSH to EC2: ssh -i tf-ec2.pem ec2-user@${aws_instance.web.public_ip}
-       Run: curl -sSL https://raw.githubusercontent.com/YOUR_REPO/main/initial-ec2-setup.sh | bash
-    
-    3. CREATE JENKINS PIPELINE:
-       - Create new Pipeline job
-       - Use 'Jenkinsfile.deploy' from your repository
-       - Configure GitHub webhook for automatic builds
-    
-    4. APPLICATION ACCESS:
-       - Main App: http://${aws_instance.web.public_ip}/
-       - Grafana: http://${aws_instance.monitor.public_ip}:3000
-       - Prometheus: http://${aws_instance.monitor.public_ip}:9090
-    
-    =======================================================
-  EOT
-  description = "Instructions for setting up CI/CD pipeline"
+output "application_url" {
+  value       = "http://${aws_instance.web.public_ip}/"
+  description = "Student Registration System Application URL"
 }
 
-# NEW: Output the SSH key content for easy copy-paste
-output "ssh_private_key_path" {
-  value = "${path.module}/tf-ec2.pem"
-  description = "Path to the SSH private key file"
+output "security_group_web_id" {
+  value       = aws_security_group.web.id
+  description = "Security group ID for the web server"
 }
 
-# NEW: Output instance details for monitoring
-output "ec2_instance_id" {
-  value = aws_instance.web.id
-  description = "EC2 instance ID for monitoring and management"
+output "security_group_monitor_id" {
+  value       = aws_security_group.monitor.id
+  description = "Security group ID for the monitoring server"
 }
 
-output "monitor_instance_id" {
-  value = aws_instance.monitor.id
-  description = "Monitor instance ID"
-}
-
-# NEW: Security group IDs for reference
-output "web_security_group_id" {
-  value = aws_security_group.web.id
-  description = "Security group ID for web instance"
-}
-
-output "monitor_security_group_id" {
-  value = aws_security_group.monitor.id
-  description = "Security group ID for monitor instance"
+# Summary output for easy reference
+output "deployment_summary" {
+  value = {
+    application_url = "http://${aws_instance.web.public_ip}/"
+    grafana_url     = "http://${aws_instance.monitor.public_ip}:3000"
+    prometheus_url  = "http://${aws_instance.monitor.public_ip}:9090"
+    ssh_command     = "ssh -i tf-ec2.pem ec2-user@${aws_instance.web.public_ip}"
+    docker_image    = "munieb/student-registration:latest"
+  }
+  description = "Summary of all deployment URLs and access information"
 }

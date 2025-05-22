@@ -11,6 +11,7 @@ pipeline {
         DOCKER_IMAGE_TAG = "${BUILD_NUMBER}"
         DOCKER_HUB_CREDENTIALS = credentials('docker-hub-credentials')
         AWS_CREDENTIALS = credentials('aws-credentials')
+        TERRAFORM_VERSION = "1.12.0"
     }
 
     stages {
@@ -63,51 +64,57 @@ pipeline {
             }
         }
 
-        stage('Run Tests') {
+        stage('Run Basic Tests') {
             steps {
                 sh '''#!/bin/bash
                     # Activate virtual environment
                     . $VENV_DIR/bin/activate
                     
-                    echo "Running all tests..."
-                    # Run all tests except Docker tests (since we're not spinning up docker-compose here)
-                    python -m pytest tests/ -v -k "not docker" --junitxml=test-results.xml || true
+                    # Run non-Docker tests
+                    python -m pytest tests/ -v -k "not docker and not database"
+                '''
+            }
+        }
+        
+        stage('Run Database Tests') {
+            steps {
+                sh '''#!/bin/bash
+                    # Activate virtual environment
+                    . $VENV_DIR/bin/activate
                     
-                    # Check if tests passed
-                    if [ $? -ne 0 ]; then
-                        echo "❌ Tests failed! Stopping pipeline."
-                        exit 1
-                    fi
-                    echo "✅ All tests passed!"
+                    # Run database tests
+                    python -m pytest tests/ -v -k "database"
+                '''
+            }
+        }
+
+        stage('Verify Docker') {
+            steps {
+                sh '''
+                    # Check Docker installation
+                    docker --version
+                    docker-compose --version
+                    docker run hello-world
                 '''
             }
         }
 
         stage('Build Docker Image') {
-            when {
-                // Only build if tests passed
-                expression { currentBuild.result == null }
-            }
             steps {
                 sh '''
-                    echo "Building Docker image with tag: $DOCKER_IMAGE_TAG"
-                    
-                    # Build the Docker image
+                    # Build the Docker image with a unique tag
                     docker build -t $DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG .
                     
                     # Also tag as latest
                     docker tag $DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG $DOCKER_IMAGE_NAME:latest
                     
                     # List images to verify
-                    docker images | grep $DOCKER_IMAGE_NAME || true
+                    docker images | grep $DOCKER_IMAGE_NAME
                 '''
             }
         }
         
         stage('Docker Tests') {
-            when {
-                expression { currentBuild.result == null }
-            }
             steps {
                 sh '''
                     # Check if port 3306 is in use
@@ -131,16 +138,16 @@ pipeline {
                     # Test database connection in container
                     echo "Testing database connection in container:"
                     docker-compose exec -T web python -c "
-                    from app import create_app, db
-                    from sqlalchemy import text
-                    app = create_app('testing')
-                    with app.app_context():
-                        try:
-                            db.session.execute(text('SELECT 1'))
-                            print('✅ Database connection successful')
-                        except Exception as e:
-                            print('❌ Database connection failed:', e)
-                    " || true
+from app import create_app, db
+from sqlalchemy import text
+app = create_app('testing')
+with app.app_context():
+    try:
+        db.session.execute(text('SELECT 1'))
+        print('✅ Database connection successful')
+    except Exception as e:
+        print('❌ Database connection failed:', e)
+" || true
                     
                     # Run the Docker tests
                     . venv/bin/activate && python -m pytest tests/ -v -k docker
@@ -154,63 +161,109 @@ pipeline {
         }
 
         stage('Push Docker Image') {
-            when {
-                expression { currentBuild.result == null }
-            }
             steps {
                 sh '''
-                    echo "Pushing Docker image to Docker Hub..."
-                    
                     # Login to Docker Hub
                     echo $DOCKER_HUB_CREDENTIALS_PSW | docker login -u $DOCKER_HUB_CREDENTIALS_USR --password-stdin
                     
-                    # Push both versioned and latest tags
+                    # Push the Docker image
                     docker push $DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG
                     docker push $DOCKER_IMAGE_NAME:latest
                     
-                    echo "✅ Docker image pushed successfully!"
-                    
-                    # Logout
+                    # Logout to clean up credentials
                     docker logout
                 '''
             }
         }
         
-        stage('Provision Infrastructure with Terraform') {
-            
+        stage('Install Terraform') {
             steps {
-                withCredentials([usernamePassword(
-                credentialsId: 'aws-credentials',
-                usernameVariable: 'AWS_ACCESS_KEY_ID',
-                passwordVariable: 'AWS_SECRET_ACCESS_KEY'
-                )]) {
-                    sh '''
-                        set -euxo pipefail
+                sh '''
+                    # Install Terraform without requiring sudo or unzip
+                    echo "Installing Terraform ${TERRAFORM_VERSION}..."
+                    mkdir -p ${WORKSPACE}/terraform
+                    cd ${WORKSPACE}/terraform
+                    
+                    # Use Python to download and extract Terraform
+                    python3 -c '
+import urllib.request
+import zipfile
+import os
+import sys
 
-                        # Set AWS credentials
-                        export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
-                        export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
-                        export AWS_DEFAULT_REGION=ap-southeast-1
-                        echo "🔍 Working directory: $(pwd)"
-                        echo "📦 Initializing Terraform..."
-                        echo "📦 Initializing Terraform..."
-                        terraform init -input=false
+version = os.environ.get("TERRAFORM_VERSION", "1.12.0")
+url = f"https://releases.hashicorp.com/terraform/{version}/terraform_{version}_linux_amd64.zip"
+zip_path = "terraform.zip"
 
-                        echo "🧱 Validating Terraform..."
-                        terraform validate
+print(f"Downloading Terraform {version}...")
+urllib.request.urlretrieve(url, zip_path)
 
-                        echo "🚀 Applying Terraform to provision infrastructure..."
-                        terraform apply -auto-approve
-                    '''
-                }
+print("Extracting Terraform binary...")
+with zipfile.ZipFile(zip_path, "r") as zip_ref:
+    zip_ref.extractall(".")
+
+os.chmod("terraform", 0o755)
+print("Terraform installed successfully!")
+'
+                    
+                    # Add to PATH for this session
+                    export PATH=${WORKSPACE}/terraform:$PATH
+                    
+                    # Verify installation
+                    ./terraform version
+                '''
+            }
+        }
+        
+        stage('Deploy Infrastructure with Terraform') {
+            steps {
+                sh '''
+                    # Set AWS credentials
+                    export AWS_ACCESS_KEY_ID=$AWS_CREDENTIALS_USR
+                    export AWS_SECRET_ACCESS_KEY=$AWS_CREDENTIALS_PSW
+                    export AWS_DEFAULT_REGION=ap-southeast-1
+                    
+                    # Use local Terraform installation
+                    export PATH=${WORKSPACE}/terraform:$PATH
+                    
+                    # Initialize Terraform
+                    terraform init
+                    
+                    # Plan the changes
+                    terraform plan -out=tfplan
+                    
+                    # Apply the changes
+                    terraform apply -auto-approve tfplan
+                    
+                    # Extract and display the EC2 IP address
+                    echo "===================================================="
+                    echo "                DEPLOYMENT DETAILS                   "
+                    echo "===================================================="
+                    
+                    # Output all Terraform outputs
+                    echo "All Terraform outputs:"
+                    terraform output
+                    
+                    # Extract and highlight the EC2 IP address specifically
+                    echo "Extracting website URL information..."
+                    if terraform output -json | grep -q "ec2_public_ip"; then
+                        EC2_IP=$(terraform output -raw ec2_public_ip || terraform output -json | grep -o '"ec2_public_ip":[^,}]*' | cut -d ':' -f2 | tr -d '\\"' || echo "Not found")
+                        echo "===================================================="
+                        echo "🌐 WEBSITE URL: http://$EC2_IP/"
+                        echo "===================================================="
+                        
+                        # Save the IP address to a file for later use
+                        echo "$EC2_IP" > ec2_ip.txt
+                    else
+                        echo "Warning: Could not find ec2_public_ip in Terraform outputs"
+                        echo "Available outputs:"
+                        terraform output
+                    fi
+                '''
             }
         }
 
-
-        stage('Deploy to AWS') {
-            when {
-                expression { currentBuild.result == null }
-            }
+        stage('Setup SSH Access') {
             steps {
                 sh '''#!/bin/bash
                     # Set AWS credentials
@@ -218,140 +271,248 @@ pipeline {
                     export AWS_SECRET_ACCESS_KEY=$AWS_CREDENTIALS_PSW
                     export AWS_DEFAULT_REGION=ap-southeast-1
                     
-                    # Install AWS CLI if not available
+                    # Use local Terraform installation
+                    export PATH=${WORKSPACE}/terraform:$PATH
+                    
+                    echo "🔐 Setting up SSH access to EC2..."
+                    
+                    # Create SSH directory for jenkins user if it doesn't exist
+                    sudo mkdir -p /var/lib/jenkins/.ssh
+                    sudo chown jenkins:jenkins /var/lib/jenkins/.ssh
+                    sudo chmod 700 /var/lib/jenkins/.ssh
+                    
+                    # Extract the private key from Terraform output
+                    terraform output -raw private_key_content > ec2-private-key.pem
+                    chmod 600 ec2-private-key.pem
+                    
+                    # Copy key to Jenkins SSH directory
+                    sudo cp ec2-private-key.pem /var/lib/jenkins/.ssh/ec2-key.pem
+                    sudo chown jenkins:jenkins /var/lib/jenkins/.ssh/ec2-key.pem
+                    sudo chmod 600 /var/lib/jenkins/.ssh/ec2-key.pem
+                    
+                    # Get EC2 IP for verification
+                    EC2_IP=$(terraform output -raw ec2_public_ip)
+                    echo "✅ SSH key setup complete!"
+                    echo "🌐 EC2 Instance IP: $EC2_IP"
+                    echo "🔐 SSH Key location: /var/lib/jenkins/.ssh/ec2-key.pem"
+                    
+                    # Wait for EC2 to be fully ready
+                    echo "⏳ Waiting for EC2 instance to be fully ready..."
+                    sleep 60
+                    
+                    # Test SSH connection
+                    echo "🧪 Testing SSH connection..."
+                    for i in {1..5}; do
+                        if sudo -u jenkins ssh -i /var/lib/jenkins/.ssh/ec2-key.pem -o StrictHostKeyChecking=no -o ConnectTimeout=10 ec2-user@$EC2_IP "echo 'SSH connection successful!'"; then
+                            echo "✅ SSH connection established!"
+                            break
+                        else
+                            echo "⚠️ SSH attempt $i failed, retrying..."
+                            sleep 30
+                        fi
+                    done
+                '''
+            }
+        }
+        
+        stage('Install AWS CLI') {
+            steps {
+                sh '''#!/bin/bash
+                    # Install AWS CLI using apt instead of pip to avoid externally-managed-environment error
+                    echo "📦 Installing AWS CLI using system package manager..."
+                    
+                    # Update package list
+                    sudo apt update
+                    
+                    # Install AWS CLI v2 using apt
                     if ! command -v aws &> /dev/null; then
-                        echo "Installing AWS CLI..."
-                        python3 -m pip install --user awscli
-                        export PATH=$HOME/.local/bin:$PATH
+                        echo "Installing AWS CLI v2..."
+                        curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+                        
+                        # Use Python to extract instead of unzip
+                        python3 -c '
+import zipfile
+import os
+with zipfile.ZipFile("awscliv2.zip", "r") as zip_ref:
+    zip_ref.extractall(".")
+'
+                        
+                        # Install AWS CLI
+                        sudo ./aws/install
+                        
+                        # Clean up
+                        rm -rf awscliv2.zip aws/
                     fi
                     
-                    # Get EC2 instance IP
-                    INSTANCE_IP=$(aws ec2 describe-instances \
-                        --filters "Name=tag:Name,Values=tf-docker-web" "Name=instance-state-name,Values=running" \
-                        --query "Reservations[].Instances[].PublicIpAddress" \
-                        --output text)
+                    # Verify AWS CLI installation
+                    aws --version
                     
-                    if [ -z "$INSTANCE_IP" ]; then
-                        echo "❌ No running EC2 instance found!"
+                    # Test AWS credentials
+                    export AWS_ACCESS_KEY_ID=$AWS_CREDENTIALS_USR
+                    export AWS_SECRET_ACCESS_KEY=$AWS_CREDENTIALS_PSW
+                    export AWS_DEFAULT_REGION=ap-southeast-1
+                    
+                    aws sts get-caller-identity
+                '''
+            }
+        }
+        
+        stage('Deploy Application to EC2') {
+            steps {
+                sh '''#!/bin/bash
+                    # Set AWS credentials
+                    export AWS_ACCESS_KEY_ID=$AWS_CREDENTIALS_USR
+                    export AWS_SECRET_ACCESS_KEY=$AWS_CREDENTIALS_PSW
+                    export AWS_DEFAULT_REGION=ap-southeast-1
+                    
+                    # Use local Terraform installation
+                    export PATH=${WORKSPACE}/terraform:$PATH
+                    
+                    # Get EC2 instance IP
+                    EC2_IP=$(terraform output -raw ec2_public_ip)
+                    
+                    if [ -z "$EC2_IP" ]; then
+                        echo "❌ No EC2 instance IP found!"
                         exit 1
                     fi
                     
-                    echo "🎯 Found EC2 instance: $INSTANCE_IP"
+                    echo "🎯 Deploying to EC2 instance: $EC2_IP"
                     
                     # Create deployment script
                     cat > deploy.sh << 'EOF'
-                    #!/bin/bash
-                    set -e
+#!/bin/bash
+set -e
 
-                    DOCKER_IMAGE="$1"
-                    CONTAINER_NAME="student-registration-app"
+DOCKER_IMAGE="$1"
+CONTAINER_NAME="student-registration-app"
 
-                    echo "🚀 Starting deployment of $DOCKER_IMAGE"
+echo "🚀 Starting deployment of $DOCKER_IMAGE"
 
-                    # Get current running image for rollback
-                    CURRENT_IMAGE=$(docker ps --filter "name=$CONTAINER_NAME" --format "table {{.Image}}" | tail -n +2)
-                    echo "📋 Current image: $CURRENT_IMAGE"
+# Ensure Docker is running
+sudo systemctl start docker || true
 
-                    # Pull new image
-                    echo "⬇️ Pulling new image..."
-                    docker pull $DOCKER_IMAGE
+# Create network if it doesn't exist
+docker network create app-network || true
 
-                    # Stop and remove old container
-                    echo "🛑 Stopping old container..."
-                    docker stop $CONTAINER_NAME || true
-                    docker rm $CONTAINER_NAME || true
+# Check if MySQL container exists, if not create it
+if ! docker ps -a --format 'table {{.Names}}' | grep -q mysql-prod; then
+    echo "🗄️ Creating MySQL production container..."
+    docker run -d \
+        --name mysql-prod \
+        --network app-network \
+        --restart always \
+        -e MYSQL_ROOT_PASSWORD=rootpassword \
+        -e MYSQL_DATABASE=testdb \
+        -e MYSQL_USER=testuser \
+        -e MYSQL_PASSWORD=testpass \
+        -v mysql-data:/var/lib/mysql \
+        mysql:8.0
+    
+    # Wait for MySQL to be ready
+    echo "⏳ Waiting for MySQL to be ready..."
+    sleep 30
+else
+    # Start MySQL if it's stopped
+    docker start mysql-prod || true
+fi
 
-                    # Start new container
-                    echo "🔄 Starting new container..."
-                    docker run -d \
-                        --name $CONTAINER_NAME \
-                        -p 80:5000 \
-                        -e FLASK_ENV=production \
-                        -e DATABASE_URL=mysql+pymysql://testuser:testpass@db:3306/testdb \
-                        --network app-network \
-                        $DOCKER_IMAGE
+# Get current running image for rollback
+CURRENT_IMAGE=$(docker ps --filter "name=$CONTAINER_NAME" --format "table {{.Image}}" | tail -n +2 | head -1)
+echo "📋 Current image: $CURRENT_IMAGE"
 
-                    # Wait for container to start
-                    sleep 10
+# Pull new image
+echo "⬇️ Pulling new image..."
+docker pull $DOCKER_IMAGE
 
-                    # Health check
-                    echo "🏥 Performing health check..."
-                    HEALTH_CHECK=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/ || echo "000")
+# Stop and remove old container
+echo "🛑 Stopping old container..."
+docker stop $CONTAINER_NAME || true
+docker rm $CONTAINER_NAME || true
 
-                    if [ "$HEALTH_CHECK" = "200" ]; then
-                        echo "✅ Health check passed! Deployment successful."
-                        echo "🗑️ Cleaning up old images..."
-                        docker image prune -f
-                        exit 0
-                    else
-                        echo "❌ Health check failed! Rolling back..."
-                        
-                        # Stop failed container
-                        docker stop $CONTAINER_NAME || true
-                        docker rm $CONTAINER_NAME || true
-                        
-                        # Rollback to previous image
-                        if [ -n "$CURRENT_IMAGE" ] && [ "$CURRENT_IMAGE" != "REPOSITORY" ]; then
-                            echo "🔄 Rolling back to: $CURRENT_IMAGE"
-                            docker run -d \
-                                --name $CONTAINER_NAME \
-                                -p 80:5000 \
-                                -e FLASK_ENV=production \
-                                -e DATABASE_URL=mysql+pymysql://testuser:testpass@db:3306/testdb \
-                                --network app-network \
-                                $CURRENT_IMAGE
-                            echo "🔙 Rollback completed!"
-                        else
-                            echo "⚠️ No previous image available for rollback!"
-                        fi
-                        exit 1
-                    fi
-                    EOF
+# Start new container
+echo "🔄 Starting new container..."
+docker run -d \
+    --name $CONTAINER_NAME \
+    --network app-network \
+    --restart always \
+    -p 80:5000 \
+    -e FLASK_ENV=production \
+    -e DATABASE_URL=mysql+pymysql://testuser:testpass@mysql-prod:3306/testdb \
+    $DOCKER_IMAGE
+
+# Wait for container to start
+echo "⏳ Waiting for application to start..."
+sleep 20
+
+# Health check
+echo "🏥 Performing health check..."
+for i in {1..10}; do
+    HEALTH_CHECK=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/ || echo "000")
+    if [ "$HEALTH_CHECK" = "200" ]; then
+        echo "✅ Health check passed! Deployment successful."
+        echo "🗑️ Cleaning up old images..."
+        docker image prune -f
+        exit 0
+    else
+        echo "⚠️ Health check attempt $i/10 failed - Status: $HEALTH_CHECK"
+        sleep 10
+    fi
+done
+
+echo "❌ Health check failed! Rolling back..."
+
+# Stop failed container
+docker stop $CONTAINER_NAME || true
+docker rm $CONTAINER_NAME || true
+
+# Rollback to previous image
+if [ -n "$CURRENT_IMAGE" ] && [ "$CURRENT_IMAGE" != "REPOSITORY" ] && [ "$CURRENT_IMAGE" != "$DOCKER_IMAGE" ]; then
+    echo "🔄 Rolling back to: $CURRENT_IMAGE"
+    docker run -d \
+        --name $CONTAINER_NAME \
+        --network app-network \
+        --restart always \
+        -p 80:5000 \
+        -e FLASK_ENV=production \
+        -e DATABASE_URL=mysql+pymysql://testuser:testpass@mysql-prod:3306/testdb \
+        $CURRENT_IMAGE
+    echo "🔙 Rollback completed!"
+else
+    echo "⚠️ No previous image available for rollback!"
+fi
+exit 1
+EOF
 
                     # Copy deployment script to EC2
                     echo "📤 Copying deployment script to EC2..."
-                    scp -i ~/.ssh/ec2-key.pem -o StrictHostKeyChecking=no deploy.sh ec2-user@$INSTANCE_IP:/tmp/
+                    scp -i /var/lib/jenkins/.ssh/ec2-key.pem -o StrictHostKeyChecking=no deploy.sh ec2-user@$EC2_IP:/tmp/
                     
                     # Execute deployment
                     echo "🚀 Executing deployment on EC2..."
-                    ssh -i ~/.ssh/ec2-key.pem -o StrictHostKeyChecking=no ec2-user@$INSTANCE_IP \
+                    ssh -i /var/lib/jenkins/.ssh/ec2-key.pem -o StrictHostKeyChecking=no ec2-user@$EC2_IP \
                         "chmod +x /tmp/deploy.sh && /tmp/deploy.sh $DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG"
                     
                     echo "🎉 Deployment completed successfully!"
-                    echo "🌐 Application URL: http://$INSTANCE_IP/"
+                    echo "🌐 Application URL: http://$EC2_IP/"
                 '''
             }
         }
 
         stage('Post-Deployment Verification') {
-            when {
-                expression { currentBuild.result == null }
-            }
             steps {
                 sh '''#!/bin/bash
-                    # Set AWS credentials
-                    export AWS_ACCESS_KEY_ID=$AWS_CREDENTIALS_USR
-                    export AWS_SECRET_ACCESS_KEY=$AWS_CREDENTIALS_PSW
-                    export AWS_DEFAULT_REGION=ap-southeast-1
-                    
-                    # Install AWS CLI if not available
-                    if ! command -v aws &> /dev/null; then
-                        python3 -m pip install --user awscli
-                        export PATH=$HOME/.local/bin:$PATH
-                    fi
+                    # Use local Terraform installation
+                    export PATH=${WORKSPACE}/terraform:$PATH
                     
                     # Get EC2 instance IP
-                    INSTANCE_IP=$(aws ec2 describe-instances \
-                        --filters "Name=tag:Name,Values=tf-docker-web" "Name=instance-state-name,Values=running" \
-                        --query "Reservations[].Instances[].PublicIpAddress" \
-                        --output text)
+                    EC2_IP=$(terraform output -raw ec2_public_ip)
                     
                     # Perform comprehensive health check
                     echo "🔍 Performing post-deployment verification..."
                     
                     # Check if application is responding
                     for i in {1..5}; do
-                        RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" http://$INSTANCE_IP/ || echo "000")
+                        RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" http://$EC2_IP/ || echo "000")
                         if [ "$RESPONSE" = "200" ]; then
                             echo "✅ Application is responding correctly (attempt $i)"
                             break
@@ -361,18 +522,18 @@ pipeline {
                                 echo "❌ Final health check failed! Consider rollback."
                                 exit 1
                             fi
-                            sleep 5
+                            sleep 10
                         fi
                     done
                     
                     echo "🎯 Final deployment verification complete!"
                     echo "📊 Application Status: HEALTHY"
-                    echo "🌐 Access your application at: http://$INSTANCE_IP/"
+                    echo "🌐 Access your application at: http://$EC2_IP/"
                 '''
             }
         }
     }
-
+    
     post {
         always {
             echo 'Cleaning up workspace...'
@@ -390,27 +551,16 @@ pipeline {
         success {
             echo '🎉 Build, test, and deployment completed successfully!'
             sh '''
-                # Set AWS credentials for success notification
-                export AWS_ACCESS_KEY_ID=$AWS_CREDENTIALS_USR
-                export AWS_SECRET_ACCESS_KEY=$AWS_CREDENTIALS_PSW
-                export AWS_DEFAULT_REGION=ap-southeast-1
-                
-                # Install AWS CLI if not available
-                if ! command -v aws &> /dev/null; then
-                    python3 -m pip install --user awscli
-                    export PATH=$HOME/.local/bin:$PATH
-                fi
+                # Use local Terraform installation
+                export PATH=${WORKSPACE}/terraform:$PATH
                 
                 # Get instance IP for final message
-                INSTANCE_IP=$(aws ec2 describe-instances \
-                    --filters "Name=tag:Name,Values=tf-docker-web" "Name=instance-state-name,Values=running" \
-                    --query "Reservations[].Instances[].PublicIpAddress" \
-                    --output text)
+                EC2_IP=$(terraform output -raw ec2_public_ip || echo "Unknown")
                 
                 echo "════════════════════════════════════════════════════════"
                 echo "🎉 DEPLOYMENT SUCCESSFUL!"
                 echo "📦 Docker Image: $DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG"
-                echo "🌐 Application URL: http://$INSTANCE_IP/"
+                echo "🌐 Application URL: http://$EC2_IP/"
                 echo "⏰ Deployment completed at: $(date)"
                 echo "════════════════════════════════════════════════════════"
             '''
@@ -424,7 +574,6 @@ pipeline {
                 echo "📦 Failed Image: $DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG"
                 echo "⏰ Failure occurred at: $(date)"
                 echo "🔍 Check the logs above for detailed error information"
-                echo "🔄 Previous version should still be running if rollback succeeded"
                 echo "════════════════════════════════════════════════════════"
             '''
         }
