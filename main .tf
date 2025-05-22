@@ -380,6 +380,27 @@ resource "aws_instance" "monitor" {
   EOF
 }
 
+output "ec2_public_ip" {
+  value       = aws_instance.web.public_ip
+  description = "Public IPv4 address of the EC2 instance"
+}
+
+output "ec2_public_dns" {
+  value       = aws_instance.web.public_dns
+  description = "Public DNS name (useful for browser test)"
+}
+
+# NEW: Output for CI/CD pipeline
+output "ssh_connection_command" {
+  value       = "ssh -i tf-ec2.pem ec2-user@${aws_instance.web.public_ip}"
+  description = "SSH command to connect to the EC2 instance"
+}
+
+output "application_url" {
+  value       = "http://${aws_instance.web.public_ip}/"
+  description = "Direct URL to access the deployed application"
+}
+
 output "grafana_url" {
   description = "Login Grafana with admin / admin"
   value       = "http://${aws_instance.monitor.public_ip}:3000"
@@ -387,4 +408,64 @@ output "grafana_url" {
 
 output "prometheus_url" {
   value = "http://${aws_instance.monitor.public_ip}:9090"
+  description = "Prometheus monitoring interface"
+}
+
+# NEW: CI/CD Setup Instructions
+output "cicd_setup_instructions" {
+  value = <<-EOT
+    =======================================================
+    CI/CD SETUP INSTRUCTIONS
+    =======================================================
+    
+    1. JENKINS CREDENTIALS SETUP:
+       - Add 'ec2-public-ip' secret: ${aws_instance.web.public_ip}
+       - Add 'ec2-ssh-private-key' with content from: tf-ec2.pem
+       - Ensure docker-hub-credentials and aws-credentials are configured
+    
+    2. PREPARE EC2 FOR CI/CD:
+       SSH to EC2: ssh -i tf-ec2.pem ec2-user@${aws_instance.web.public_ip}
+       Run: curl -sSL https://raw.githubusercontent.com/YOUR_REPO/main/initial-ec2-setup.sh | bash
+    
+    3. CREATE JENKINS PIPELINE:
+       - Create new Pipeline job
+       - Use 'Jenkinsfile.deploy' from your repository
+       - Configure GitHub webhook for automatic builds
+    
+    4. APPLICATION ACCESS:
+       - Main App: http://${aws_instance.web.public_ip}/
+       - Grafana: http://${aws_instance.monitor.public_ip}:3000
+       - Prometheus: http://${aws_instance.monitor.public_ip}:9090
+    
+    =======================================================
+  EOT
+  description = "Instructions for setting up CI/CD pipeline"
+}
+
+# NEW: Output the SSH key content for easy copy-paste
+output "ssh_private_key_path" {
+  value = "${path.module}/tf-ec2.pem"
+  description = "Path to the SSH private key file"
+}
+
+# NEW: Output instance details for monitoring
+output "ec2_instance_id" {
+  value = aws_instance.web.id
+  description = "EC2 instance ID for monitoring and management"
+}
+
+output "monitor_instance_id" {
+  value = aws_instance.monitor.id
+  description = "Monitor instance ID"
+}
+
+# NEW: Security group IDs for reference
+output "web_security_group_id" {
+  value = aws_security_group.web.id
+  description = "Security group ID for web instance"
+}
+
+output "monitor_security_group_id" {
+  value = aws_security_group.monitor.id
+  description = "Security group ID for monitor instance"
 }

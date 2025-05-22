@@ -1,0 +1,248 @@
+pipeline {
+    agent any
+    
+    parameters {
+        string(name: 'ROLLBACK_VERSION', defaultValue: '', description: 'Build number to rollback to (e.g., 45)')
+        booleanParam(name: 'CONFIRM_ROLLBACK', defaultValue: false, description: 'Check this box to confirm rollback')
+    }
+
+    environment {
+        DOCKER_IMAGE_NAME = 'munieb/student-registration'
+        EC2_SSH_KEY = credentials('ec2-ssh-private-key')
+        EC2_PUBLIC_IP = credentials('ec2-public-ip')
+        EC2_USER = 'ec2-user'
+    }
+
+    stages {
+        stage('Validate Parameters') {
+            steps {
+                script {
+                    if (!params.CONFIRM_ROLLBACK) {
+                        error("Rollback canceled. You must check the confirmation box to proceed.")
+                    }
+                    
+                    if (!params.ROLLBACK_VERSION || params.ROLLBACK_VERSION.trim() == '') {
+                        error("Rollback version is required. Please specify a build number.")
+                    }
+                    
+                    echo "Rollback confirmed. Target version: ${params.ROLLBACK_VERSION}"
+                }
+            }
+        }
+        
+        stage('Verify Target Version') {
+            steps {
+                sh '''#!/bin/bash
+                    echo "Verifying target version exists..."
+                    
+                    # Check if the target image exists on Docker Hub
+                    if docker manifest inspect $DOCKER_IMAGE_NAME:$ROLLBACK_VERSION >/dev/null 2>&1; then
+                        echo "✅ Target version $ROLLBACK_VERSION exists on Docker Hub"
+                    else
+                        echo "❌ Target version $ROLLBACK_VERSION not found on Docker Hub"
+                        echo "Available versions:"
+                        
+                        # List available versions on EC2 (if any)
+                        ssh -i $EC2_SSH_KEY -o StrictHostKeyChecking=no $EC2_USER@$EC2_PUBLIC_IP "
+                            echo 'Available local versions:'
+                            docker images $DOCKER_IMAGE_NAME --format 'table {{.Tag}}\t{{.CreatedAt}}' | head -10
+                        " || echo "Could not list versions from EC2"
+                        
+                        exit 1
+                    fi
+                '''
+            }
+        }
+        
+        stage('Backup Current State') {
+            steps {
+                sh '''#!/bin/bash
+                    echo "Creating backup of current deployment state..."
+                    
+                    # Get current running image info
+                    ssh -i $EC2_SSH_KEY -o StrictHostKeyChecking=no $EC2_USER@$EC2_PUBLIC_IP "
+                        if docker ps -q -f name=student-registration-web >/dev/null; then
+                            CURRENT_IMAGE=\\$(docker inspect student-registration-web --format='{{.Config.Image}}' 2>/dev/null || echo 'none')
+                            echo \\\"Current running image: \\$CURRENT_IMAGE\\\" > /tmp/rollback_backup_info.txt
+                            echo \\\"Backup created at: \\$(date)\\\" >> /tmp/rollback_backup_info.txt
+                            cat /tmp/rollback_backup_info.txt
+                        else
+                            echo 'No container currently running'
+                        fi
+                    "
+                '''
+            }
+        }
+        
+        stage('Perform Rollback') {
+            steps {
+                sh '''#!/bin/bash
+                    echo "Performing rollback to version $ROLLBACK_VERSION..."
+                    
+                    # Create rollback script
+                    cat > rollback_script.sh << 'ROLLBACK_SCRIPT'
+#!/bin/bash
+set -e
+
+TARGET_VERSION="$1"
+IMAGE_NAME="$2"
+
+echo "Starting rollback to $IMAGE_NAME:$TARGET_VERSION..."
+
+# Stop current container if running
+if docker ps -q -f name=student-registration-web >/dev/null; then
+    echo "Stopping current container..."
+    docker stop student-registration-web
+    docker rm student-registration-web
+else
+    echo "No container currently running"
+fi
+
+# Pull the target version (in case it's not locally available)
+echo "Pulling target version..."
+docker pull $IMAGE_NAME:$TARGET_VERSION
+
+# Start container with target version
+echo "Starting container with target version..."
+docker run -d \\
+    --name student-registration-web \\
+    --restart unless-stopped \\
+    -p 80:5000 \\
+    -e FLASK_ENV=production \\
+    -e FLASK_CONFIG=production \\
+    $IMAGE_NAME:$TARGET_VERSION
+
+# Wait for container to start
+echo "Waiting for container to start..."
+sleep 15
+
+# Health check
+echo "Performing health check..."
+for i in {1..10}; do
+    if curl -f -s http://localhost/ >/dev/null; then
+        echo "✅ Rollback successful! Application is responding."
+        exit 0
+    fi
+    echo "Health check attempt $i failed, retrying in 10 seconds..."
+    sleep 10
+done
+
+echo "❌ Rollback failed! Application is not responding after health checks."
+exit 1
+ROLLBACK_SCRIPT
+
+                    # Make script executable and copy to EC2
+                    chmod +x rollback_script.sh
+                    scp -i $EC2_SSH_KEY -o StrictHostKeyChecking=no rollback_script.sh $EC2_USER@$EC2_PUBLIC_IP:/tmp/
+                    
+                    # Execute rollback on EC2
+                    ssh -i $EC2_SSH_KEY -o StrictHostKeyChecking=no $EC2_USER@$EC2_PUBLIC_IP "
+                        chmod +x /tmp/rollback_script.sh
+                        /tmp/rollback_script.sh $ROLLBACK_VERSION $DOCKER_IMAGE_NAME
+                        rm /tmp/rollback_script.sh
+                    "
+                '''
+            }
+        }
+        
+        stage('Verify Rollback') {
+            steps {
+                sh '''#!/bin/bash
+                    echo "Verifying rollback success..."
+                    
+                    # Wait a bit more for the application to fully start
+                    sleep 10
+                    
+                    # Comprehensive health check
+                    echo "Testing application endpoints..."
+                    
+                    # Basic connectivity test
+                    if curl -f -s http://$EC2_PUBLIC_IP/ >/dev/null; then
+                        echo "✅ Application is responding to HTTP requests"
+                    else
+                        echo "❌ Application is not responding"
+                        exit 1
+                    fi
+                    
+                    # Verify correct version is running
+                    ssh -i $EC2_SSH_KEY -o StrictHostKeyChecking=no $EC2_USER@$EC2_PUBLIC_IP "
+                        RUNNING_IMAGE=\\$(docker inspect student-registration-web --format='{{.Config.Image}}' 2>/dev/null || echo 'none')
+                        echo \\\"Currently running image: \\$RUNNING_IMAGE\\\"
+                        
+                        if echo \\\"\\$RUNNING_IMAGE\\\" | grep -q \\\":$ROLLBACK_VERSION\\\"; then
+                            echo '✅ Correct version is running'
+                        else
+                            echo '❌ Wrong version is running!'
+                            exit 1
+                        fi
+                    "
+                    
+                    echo "✅ Rollback verification completed successfully!"
+                '''
+            }
+        }
+        
+        stage('Update Build Records') {
+            steps {
+                script {
+                    // Update the last successful build record
+                    writeFile file: 'last_successful_build.txt', text: "${params.ROLLBACK_VERSION}"
+                    echo "Updated last successful build record to: ${params.ROLLBACK_VERSION}"
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ Rollback to version ${params.ROLLBACK_VERSION} completed successfully!"
+            echo "🌐 Application URL: http://${EC2_PUBLIC_IP}/"
+            
+            // Send notification (if you have email/Slack configured)
+            // emailext (
+            //     subject: "✅ Rollback Successful - Version ${params.ROLLBACK_VERSION}",
+            //     body: "Rollback to version ${params.ROLLBACK_VERSION} completed successfully.\nApplication URL: http://${EC2_PUBLIC_IP}/",
+            //     to: "your-email@example.com"
+            // )
+        }
+        
+        failure {
+            echo "❌ Rollback failed!"
+            
+            // Attempt to restore previous state if possible
+            script {
+                try {
+                    sh '''#!/bin/bash
+                        echo "Attempting to restore previous state..."
+                        ssh -i $EC2_SSH_KEY -o StrictHostKeyChecking=no $EC2_USER@$EC2_PUBLIC_IP "
+                            if [ -f /tmp/rollback_backup_info.txt ]; then
+                                echo 'Previous state info:'
+                                cat /tmp/rollback_backup_info.txt
+                            fi
+                            
+                            # Try to restart any stopped container
+                            if docker ps -a -q -f name=student-registration-web -f status=exited >/dev/null; then
+                                echo 'Attempting to restart stopped container...'
+                                docker start student-registration-web || true
+                            fi
+                        "
+                    '''
+                } catch (Exception e) {
+                    echo "Could not restore previous state: ${e.getMessage()}"
+                }
+            }
+            
+            // Send failure notification
+            // emailext (
+            //     subject: "❌ Rollback Failed - Version ${params.ROLLBACK_VERSION}",
+            //     body: "Rollback to version ${params.ROLLBACK_VERSION} failed. Manual intervention required.\nCheck Jenkins logs for details.",
+            //     to: "your-email@example.com"
+            // )
+        }
+        
+        always {
+            // Clean up temporary files
+            sh 'rm -f rollback_script.sh'
+        }
+    }
+}
