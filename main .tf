@@ -175,25 +175,42 @@ resource "aws_instance" "web" {
               curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
               chmod +x /usr/local/bin/docker-compose
 
-              # Clone repo (only for the docker-copmose and init.sql)
-              git clone https://github.com/RafidAlJawad1/test.git /home/ec2-user/app
-              cd /home/ec2-user/app
+              # Create docker network for the application
+              docker network create app-network || true
 
-
-              # Start containers
-              docker-compose up -d
-
-              # Wait and optionally initialize DB
-              sleep 30
-              docker-compose exec web flask init-db || true
-
-              # ---- monitoring ----
+              # Start MySQL container for production
               docker run -d \
-                --name=node-exporter \
-                --restart=always \
-                --net=host \
-                quay.io/prometheus/node-exporter:latest
+                --name mysql-prod \
+                --network app-network \
+                --restart always \
+                -e MYSQL_ROOT_PASSWORD=rootpassword \
+                -e MYSQL_DATABASE=testdb \
+                -e MYSQL_USER=testuser \
+                -e MYSQL_PASSWORD=testpass \
+                -v mysql-data:/var/lib/mysql \
+                mysql:8.0
 
+              # Wait for MySQL to be ready
+              sleep 30
+
+              # Initialize database with your schema
+              # (This will be done by the application on first run)
+
+              # Create initial student-registration container
+              # This will be replaced by Jenkins deployments
+              docker run -d \
+                --name student-registration-app \
+                --network app-network \
+                --restart always \
+                -p 80:5000 \
+                -e FLASK_ENV=production \
+                -e DATABASE_URL=mysql+pymysql://testuser:testpass@mysql-prod:3306/testdb \
+                munieb/student-registration:latest || echo "Initial image not available, will be deployed via CI/CD"
+
+              # Ensure ec2-user can manage Docker
+              usermod -aG docker ec2-user
+
+              echo "🚀 EC2 instance ready for CI/CD deployments!"
         EOF
 
 
@@ -214,6 +231,17 @@ output "ec2_public_ip" {
 output "ec2_public_dns" {
   value       = aws_instance.web.public_dns
   description = "Public DNS name (useful for browser test)"
+}
+
+output "ec2_instance_id" {
+  value       = aws_instance.web.id
+  description = "EC2 Instance ID"
+}
+
+output "private_key_content" {
+  value     = tls_private_key.ssh.private_key_pem
+  sensitive = true
+  description = "Private key for SSH access to EC2"
 }
 
 
