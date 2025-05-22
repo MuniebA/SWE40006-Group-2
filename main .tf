@@ -7,12 +7,16 @@ terraform {
       version = "6.0.0-beta1"
     }
     tls = {
-        source = "hashicorp/tls"
-        version = ">= 3.0.0"
+      source  = "hashicorp/tls"
+      version = ">= 3.0.0"
     }
     local = {
-        source = "hashicorp/local"
-        version = ">= 2.0.0"
+      source  = "hashicorp/local"
+      version = ">= 2.0.0"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = ">=3.0.0"
     }
   }
 }
@@ -101,6 +105,15 @@ resource "aws_security_group" "web" {
     cidr_blocks = var.allowed_cidr
   }
 
+  ingress {
+  description = "Node-exporter"
+  from_port   = 9100
+  to_port     = 9100
+  protocol    = "tcp"
+  security_groups = [aws_security_group.monitor.id]  # safer than 0.0.0.0/0
+}
+
+
   # Default egress (all traffic out)
   egress {
     from_port   = 0
@@ -137,15 +150,15 @@ data "aws_ssm_parameter" "al2023_minimal" {
 }
 
 resource "aws_instance" "web" {
-  ami           = data.aws_ssm_parameter.al2023_minimal.value
-  instance_type = var.instance_type
-  subnet_id     = data.aws_subnets.default.ids[0]
-  vpc_security_group_ids = [aws_security_group.web.id]
+  ami                         = data.aws_ssm_parameter.al2023_minimal.value
+  instance_type               = var.instance_type
+  subnet_id                   = data.aws_subnets.default.ids[0]
+  vpc_security_group_ids      = [aws_security_group.web.id]
   associate_public_ip_address = true
-  key_name = aws_key_pair.generated.key_name
+  key_name                    = aws_key_pair.generated.key_name
 
   root_block_device {
-    volume_size = 8  # Adjust as needed; must be >= minimal AMI's snapshot size
+    volume_size = 8 # Adjust as needed; must be >= minimal AMI's snapshot size
     volume_type = "gp3"
   }
 
@@ -173,13 +186,21 @@ resource "aws_instance" "web" {
               # Wait and optionally initialize DB
               sleep 30
               docker-compose exec web flask init-db || true
+
+              # ---- monitoring ----
+              docker run -d \
+                --name=node-exporter \
+                --restart=always \
+                --net=host \
+                quay.io/prometheus/node-exporter:latest
+
         EOF
 
 
 
 
   tags = {
-    Name = "tf-docker-web"
+    Name        = "tf-docker-web"
     Environment = "demo"
   }
 }
@@ -193,4 +214,149 @@ output "ec2_public_ip" {
 output "ec2_public_dns" {
   value       = aws_instance.web.public_dns
   description = "Public DNS name (useful for browser test)"
+}
+
+
+resource "aws_security_group" "monitor" {
+  name        = "tf-monitor-sg-${random_pet.suffix.id}"
+  description = "Allow Prometheus & Grafana UI"
+  vpc_id      = data.aws_vpc.default.id
+
+  # -------- Inbound rules --------
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] # SSH
+  }
+
+  ingress {
+    from_port   = 3000
+    to_port     = 3000
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] # Grafana
+  }
+
+  ingress {
+    from_port   = 9090
+    to_port     = 9090
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] # Prometheus UI (optional)
+  }
+
+  # -------- Outbound rule --------
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+
+data "aws_ssm_parameter" "al2023_std" {
+  name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
+}
+
+resource "aws_instance" "monitor" {
+  ami                         = data.aws_ssm_parameter.al2023_std.value
+  instance_type               = "t3.micro"
+  subnet_id                   = data.aws_subnets.default.ids[0]
+  vpc_security_group_ids      = [aws_security_group.monitor.id]
+  associate_public_ip_address = true
+  key_name                    = aws_key_pair.generated.key_name
+
+  tags = { Name = "tf-monitor", Environment = "demo" }
+
+  user_data = <<-EOF
+    #!/bin/bash
+    set -euxo pipefail
+    dnf update -y
+    dnf install -y docker git
+    systemctl enable --now docker
+
+    # Install Docker Compose v1 plugin (Amazon Linux 2023)
+    # mkdir -p /usr/libexec/docker/cli-plugins
+    sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" \
+    -o /usr/local/bin/docker-compose
+    sudo chmod +x /usr/local/bin/docker-compose
+
+    # --- Prometheus + Grafana stack ---
+    mkdir -p /opt/prom-stack/provisioning/{datasources,dashboards}
+    mkdir -p /var/lib/grafana/dashboards
+    
+    cat > /opt/prom-stack/prometheus.yml <<PROM
+    global:
+      scrape_interval: 15s
+    scrape_configs:
+      - job_name: node_exporter
+        static_configs:
+          - targets: ['${aws_instance.web.private_ip}:9100']
+    PROM
+
+    cat > /opt/prom-stack/docker-compose.yml <<'COMPOSE'
+    version: "3.8"
+    services:
+      prometheus:
+        image: prom/prometheus:latest
+        volumes:
+          - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+        command:
+          - "--config.file=/etc/prometheus/prometheus.yml"
+        ports:
+          - "9090:9090"
+
+      grafana:
+        image: grafana/grafana:latest
+        ports:
+          - "3000:3000"
+        environment:
+          - GF_SECURITY_ADMIN_PASSWORD=admin #GF_SECURITY_ADMIN_PASSWORD=$${GRAFANA_ADMIN_PASSWORD:-ChangeMe!}
+        volumes:
+          - grafana-data:/var/lib/grafana
+          - ./provisioning:/etc/grafana/provisioning
+
+    volumes:
+      grafana-data:
+    COMPOSE
+
+    cat > /opt/prom-stack/provisioning/datasources/ds.yml <<'DS'
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus:9090
+        isDefault: true
+    DS
+
+    cat > /opt/prom-stack/provisioning/dashboards/node.yml <<'DB'
+    apiVersion: 1
+    providers:
+      - name: Default
+        type: file
+        updateIntervalSeconds: 30
+        options:
+          path: /var/lib/grafana/dashboards
+    DB
+
+    
+    curl -sL https://grafana.com/api/dashboards/1860/revisions/32/download \
+      -o /var/lib/grafana/dashboards/node-exporter-full.json
+
+    cd /opt/prom-stack
+    sudo docker-compose up -d
+
+
+    
+  EOF
+}
+
+output "grafana_url" {
+  description = "Login Grafana with admin / admin"
+  value       = "http://${aws_instance.monitor.public_ip}:3000"
+}
+
+output "prometheus_url" {
+  value = "http://${aws_instance.monitor.public_ip}:9090"
 }
