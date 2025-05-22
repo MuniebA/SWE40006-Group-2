@@ -175,7 +175,28 @@ with app.app_context():
                 '''
             }
         }
-        
+        stage('Provision Infrastructure with Terraform') {
+            steps {
+                dir('terraform') { // if your Terraform files are in a subdirectory
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-credentials'
+                    ]]) {
+                        sh '''#!/bin/bash
+                            echo "📦 Initializing Terraform..."
+                            terraform init
+
+                            echo "🧱 Validating Terraform..."
+                            terraform validate
+
+                            echo "🚀 Applying Terraform to provision infrastructure..."
+                            terraform apply -auto-approve
+                        '''
+                    }
+                }
+            }
+        }
+
         stage('Deploy to AWS') {
             when {
                 expression { currentBuild.result == null }
