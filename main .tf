@@ -138,11 +138,11 @@ resource "aws_instance" "web" {
   key_name                    = aws_key_pair.generated.key_name
 
   root_block_device {
-    volume_size = 12 # Increased from 8GB but smaller than 20GB
+    volume_size = 12
     volume_type = "gp3"
   }
 
-  # WORKING USER_DATA - Based on friend's approach but fixed for your requirements
+  # SIMPLIFIED USER_DATA - Based on your working version but updated
   user_data = <<-EOF
               #!/bin/bash
               set -euxo pipefail
@@ -154,25 +154,15 @@ resource "aws_instance" "web" {
               echo "=== Starting EC2 User Data Script ==="
               echo "Timestamp: $(date)"
 
-              # Update system
+              # Update system first
+              echo "Updating system packages..."
               yum update -y
 
-              # CRITICAL FIX: Handle Amazon Linux 2023 curl conflicts properly
-              echo "Fixing curl package conflicts..."
-              # Method 1: Try dnf swap (safest for AL2023)
-              dnf swap -y curl-minimal curl || {
-                echo "dnf swap failed, trying --allowerasing..."
-                # Method 2: Force replace if swap fails
-                dnf install -y --allowerasing curl || {
-                  echo "curl installation failed, but continuing with curl-minimal..."
-                }
-              }
-
-              # Install core packages
+              # Install Docker and Git directly (Amazon Linux 2023 approach)
               echo "Installing Docker and Git..."
-              dnf install -y docker git
+              dnf install -y docker git curl
 
-              # Start Docker service
+              # Start and enable Docker
               echo "Starting Docker service..."
               systemctl enable docker
               systemctl start docker
@@ -193,41 +183,25 @@ resource "aws_instance" "web" {
 
               # Install docker-compose
               echo "Installing docker-compose..."
-              curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose || {
-                echo "curl failed, trying wget..."
-                wget -O /usr/local/bin/docker-compose "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" || {
-                  echo "docker-compose installation failed!"
-                  exit 1
-                }
-              }
+              curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
               chmod +x /usr/local/bin/docker-compose
 
-              # Verify docker-compose
+              # Verify docker-compose installation
               /usr/local/bin/docker-compose --version
 
-              # Clone your repository (for docker-compose.yml and init.sql)
+              # Clone your repository
               echo "Cloning repository..."
               cd /home/ec2-user
-              git clone https://github.com/MuniebA/SWE40006-Group-2.git app || {
-                echo "Git clone failed!"
-                exit 1
-              }
+              git clone https://github.com/MuniebA/SWE40006-Group-2.git app
               cd app
               chown -R ec2-user:ec2-user /home/ec2-user/app
 
-              # Pull the latest Docker image immediately
+              # Pull the latest Docker image
               echo "Pulling latest Docker image..."
               docker pull munieb/student-registration:latest
 
-              # Create production environment file
-              cat > .env << 'ENV_EOF'
-FLASK_APP=run.py
-FLASK_ENV=production
-SECRET_KEY=production-secret-key-change-this
-DATABASE_URL=mysql+pymysql://testuser:testpass@db:3306/testdb
-ENV_EOF
-
-              # Create production docker-compose.yml
+              # Create production docker-compose configuration
+              echo "Creating production docker-compose configuration..."
               cat > docker-compose.prod.yml << 'COMPOSE_EOF'
 version: '3.8'
 
@@ -248,12 +222,6 @@ services:
     networks:
       - app-network
     restart: always
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
 
   db:
     image: mysql:8.0
@@ -292,9 +260,9 @@ COMPOSE_EOF
               sleep 60
 
               # Initialize database if needed
-              echo "Initializing database..."
+              echo "Checking database initialization..."
               docker-compose -f docker-compose.prod.yml exec -T web flask db upgrade 2>/dev/null || {
-                echo "Database migration failed or not needed"
+                echo "Database migration not available or failed"
               }
 
               # Start node-exporter for monitoring
@@ -308,10 +276,6 @@ COMPOSE_EOF
                 quay.io/prometheus/node-exporter:latest \
                 --path.rootfs=/host
 
-              # Create completion marker
-              echo "Creating completion marker..."
-              touch /var/log/user-data-complete
-
               # Final health check
               echo "Performing final health check..."
               sleep 30
@@ -319,7 +283,15 @@ COMPOSE_EOF
                 echo "✅ Application is running successfully!"
               else
                 echo "⚠️ Application may not be ready yet"
+                echo "Container status:"
+                docker ps -a
+                echo "Recent logs:"
+                docker-compose -f docker-compose.prod.yml logs --tail=20
               fi
+
+              # Create completion marker - IMPORTANT for Jenkins
+              echo "Creating completion marker..."
+              touch /var/log/user-data-complete
 
               echo "=== User Data Script Completed ==="
               echo "Timestamp: $(date)"
@@ -399,6 +371,7 @@ resource "aws_instance" "monitor" {
 
   user_data = <<-EOF
     #!/bin/bash
+    set -euxo pipefail
 
     # Log everything
     exec > >(tee /var/log/user-data-monitor.log)
@@ -409,11 +382,8 @@ resource "aws_instance" "monitor" {
     # Update system
     dnf update -y
 
-    # Fix curl conflicts for monitoring instance too
-    dnf swap -y curl-minimal curl || dnf install -y --allowerasing curl || dnf install -y curl-minimal
-
     # Install packages
-    dnf install -y docker git
+    dnf install -y docker git curl
 
     # Start Docker
     systemctl enable --now docker

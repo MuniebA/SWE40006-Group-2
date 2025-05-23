@@ -370,33 +370,43 @@ print("Terraform installed successfully!")
                     
                     # Wait for user_data script to complete
                     echo "⏳ Waiting for user_data initialization..."
-                    for i in {1..25}; do
+                    for i in {1..30}; do
                         if ssh -i ~/.ssh/ec2-key.pem -o StrictHostKeyChecking=no -o ConnectTimeout=15 ec2-user@$EC2_IP "test -f /var/log/user-data-complete"; then
                             echo "✅ Infrastructure initialization completed!"
                             break
                         else
-                            echo "⏳ Waiting for initialization... attempt $i/25 (waiting 30 seconds)"
+                            echo "⏳ Waiting for initialization... attempt $i/30 (waiting 30 seconds)"
                             sleep 30
                         fi
                         
-                        if [ $i -eq 25 ]; then
-                            echo "⚠️ Initialization timeout - checking status"
-                            # Show initialization status
+                        if [ $i -eq 30 ]; then
+                            echo "⚠️ Initialization timeout - checking detailed status"
+                            # Enhanced debugging
                             ssh -i ~/.ssh/ec2-key.pem -o StrictHostKeyChecking=no ec2-user@$EC2_IP "
-                                echo '=== Infrastructure Status ==='
-                                sudo systemctl is-active docker || echo 'Docker service not active'
-                                docker ps -a || echo 'Cannot run docker ps'
-                                ls -la /var/log/user-data* || echo 'No user-data logs'
-                                tail -20 /var/log/user-data.log || echo 'Cannot read user-data log'
+                                echo '=== Detailed Infrastructure Status ==='
+                                echo 'Docker service status:'
+                                sudo systemctl status docker || echo 'Docker service failed'
+                                echo 'Available commands:'
+                                which docker || echo 'Docker command not found'
+                                which docker-compose || echo 'Docker-compose not found'
+                                echo 'User-data logs:'
+                                sudo cat /var/log/user-data.log 2>/dev/null || echo 'No user-data.log'
+                                echo 'Cloud-init logs (last 50 lines):'
+                                sudo tail -50 /var/log/cloud-init-output.log 2>/dev/null || echo 'No cloud-init logs'
+                                echo 'Recent system messages:'
+                                sudo tail -20 /var/log/messages 2>/dev/null || echo 'No system messages'
                             "
+                            echo "❌ Deployment failed - check logs above"
+                            exit 1
                         fi
                     done
                     
                     # Verify application is running
                     echo "🌐 Verifying application deployment..."
                     ssh -i ~/.ssh/ec2-key.pem -o StrictHostKeyChecking=no ec2-user@$EC2_IP "
-                        echo 'Checking application status...'
-                        docker ps
+                        echo 'Final verification:'
+                        docker --version || echo 'Docker not available'
+                        docker ps -a || echo 'Cannot list containers'
                         echo 'Testing local application...'
                         curl -I http://localhost/ || echo 'Local application test failed'
                     "
