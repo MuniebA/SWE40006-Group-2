@@ -129,8 +129,24 @@ pipeline {
                     # Start Docker Compose with database and web app
                     docker-compose up -d
                     
-                    echo "Waiting for containers to start..."
-                    sleep 20
+                    echo "Waiting for MySQL to initialize..."
+                    sleep 30
+                    
+                    # Wait for MySQL to be ready with retry logic
+                    echo "Checking MySQL readiness..."
+                    for i in {1..12}; do
+                        if docker-compose exec -T db mysqladmin ping -h localhost -u root -prootpassword --silent; then
+                            echo "✅ MySQL is ready!"
+                            break
+                        else
+                            echo "⏳ MySQL not ready yet (attempt $i/12), waiting 10 seconds..."
+                            sleep 10
+                        fi
+                    done
+                    
+                    # Additional wait for web app to start
+                    echo "Waiting for web application to start..."
+                    sleep 15
                     
                     # Show running containers
                     docker-compose ps
