@@ -144,25 +144,11 @@ pipeline {
                         fi
                     done
                     
-                    # Wait for web application to be healthy using Python instead of curl
+                    # Wait for web application using Python one-liner
                     echo "🌐 Checking web application health..."
                     for i in {1..15}; do
-                        # Use Python requests instead of curl
-                        if docker-compose exec -T web python -c "
-            import requests
-            import sys
-            try:
-            response = requests.get('http://localhost:5000/', timeout=5)
-            if response.status_code == 200:
-                print('✅ Root endpoint healthy')
-                sys.exit(0)
-            else:
-                print(f'❌ Root endpoint returned: {response.status_code}')
-                sys.exit(1)
-            except Exception as e:
-            print(f'❌ Health check failed: {e}')
-            sys.exit(1)
-            "; then
+                        # Simple Python health check - single line to avoid indentation issues
+                        if docker-compose exec -T web python -c "import urllib.request; response = urllib.request.urlopen('http://localhost:5000/', timeout=5); exit(0 if response.getcode() == 200 else 1)" 2>/dev/null; then
                             echo "✅ Web application is healthy (attempt $i)"
                             break
                         else
@@ -184,62 +170,94 @@ pipeline {
                     echo "📋 Container status:"
                     docker-compose ps
                     
+                    # Create temporary test script to avoid shell indentation issues
+                    cat > /tmp/test_db.py << 'EOF'
+from app import create_app, db
+from sqlalchemy import text
+import sys
+
+try:
+    print("Creating app with testing config...")
+    app = create_app("testing")
+    with app.app_context():
+        print("Testing database connection...")
+        result = db.session.execute(text("SELECT 1 as test")).fetchone()
+        if result and result[0] == 1:
+            print("✅ Database connection successful")
+        else:
+            print("❌ Database query failed - no result")
+            sys.exit(1)
+except Exception as e:
+    print(f"❌ Database connection failed: {e}")
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
+EOF
+
                     # Test database connection from web container
                     echo "🔍 Testing database connection from web container..."
-                    docker-compose exec -T web python -c "
-            from app import create_app, db
-            from sqlalchemy import text
-            import sys
+                    docker cp /tmp/test_db.py flaskapp-ci-web-1:/tmp/test_db.py
+                    docker-compose exec -T web python /tmp/test_db.py
+                    
+                    # Create temporary test script for endpoints
+                    cat > /tmp/test_endpoints.py << 'EOF'
+import urllib.request
+import sys
 
-            try:
-            app = create_app('testing')
-            with app.app_context():
-                result = db.session.execute(text('SELECT 1 as test')).fetchone()
-                if result and result[0] == 1:
-                    print('✅ Database connection successful')
-                else:
-                    print('❌ Database query failed')
-                    sys.exit(1)
-            except Exception as e:
-            print(f'❌ Database connection failed: {e}')
-            sys.exit(1)
-            "
+try:
+    # Test root endpoint
+    print("Testing root endpoint...")
+    response = urllib.request.urlopen("http://localhost:5000/", timeout=10)
+    if response.getcode() == 200:
+        print("✅ Root endpoint responding correctly")
+        content = response.read().decode("utf-8")[:200]
+        print(f"Response preview: {content[:100]}...")
+    else:
+        print(f"❌ Root endpoint failed: {response.getcode()}")
+        sys.exit(1)
+        
+    # Test health endpoint
+    try:
+        print("Testing health endpoint...")
+        health_response = urllib.request.urlopen("http://localhost:5000/health", timeout=10)
+        if health_response.getcode() == 200:
+            health_content = health_response.read().decode("utf-8")
+            print("✅ Health endpoint responding correctly")
+            print(f"Health response: {health_content}")
+        else:
+            print(f"⚠️ Health endpoint returned: {health_response.getcode()}")
+    except Exception as e:
+        print(f"ℹ️ Health endpoint test failed: {e}")
+        # Try the health blueprint endpoint at /health/
+        try:
+            health_response = urllib.request.urlopen("http://localhost:5000/health/", timeout=10)
+            if health_response.getcode() == 200:
+                health_content = health_response.read().decode("utf-8")
+                print("✅ Health blueprint endpoint responding correctly")
+                print(f"Health response: {health_content}")
+        except Exception as e2:
+            print(f"ℹ️ Health blueprint endpoint also failed: {e2}")
+        
+except Exception as e:
+    print(f"❌ Web application test failed: {e}")
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
+EOF
                     
                     # Test web application endpoints
                     echo "🧪 Testing web application endpoints..."
-                    docker-compose exec -T web python -c "
-            import requests
-            import sys
-
-            try:
-            # Test root endpoint
-            response = requests.get('http://localhost:5000/', timeout=10)
-            if response.status_code == 200:
-                print('✅ Root endpoint responding correctly')
-            else:
-                print(f'❌ Root endpoint failed: {response.status_code}')
-                print(f'Response: {response.text[:200]}')
-                sys.exit(1)
-                
-            # Test health endpoint (your health route is at /health/ due to url_prefix)
-            try:
-                health_response = requests.get('http://localhost:5000/health/', timeout=10)
-                if health_response.status_code == 200:
-                    print('✅ Health endpoint responding correctly')
-                    print(f'Health response: {health_response.json()}')
-                else:
-                    print(f'⚠️ Health endpoint returned: {health_response.status_code}')
-            except Exception as e:
-                print(f'ℹ️ Health endpoint test failed: {e}')
-                
-            except Exception as e:
-            print(f'❌ Web application test failed: {e}')
-            sys.exit(1)
-            "
+                    docker cp /tmp/test_endpoints.py flaskapp-ci-web-1:/tmp/test_endpoints.py
+                    docker-compose exec -T web python /tmp/test_endpoints.py
                     
                     # Run pytest Docker tests
                     echo "🔬 Running Docker-specific tests..."
-                    . venv/bin/activate && python -m pytest tests/ -v -k docker --tb=short
+                    if [ -f "venv/bin/activate" ]; then
+                        . venv/bin/activate && python -m pytest tests/ -v -k docker --tb=short
+                    else
+                        echo "⚠️ Virtual environment not found, running tests directly"
+                        python -m pytest tests/ -v -k docker --tb=short
+                    fi
                     
                     echo "✅ All Docker tests passed successfully!"
                 '''
@@ -250,16 +268,23 @@ pipeline {
                         echo "🧹 Cleaning up Docker containers..."
                         docker-compose down -v
                         docker container prune -f
+                        # Clean up temporary test files
+                        rm -f /tmp/test_db.py /tmp/test_endpoints.py
                     '''
                 }
                 failure {
                     sh '''
                         echo "❌ Docker tests failed! Capturing logs for debugging..."
+                        echo "=== Docker Compose Logs ==="
                         docker-compose logs || true
+                        echo "=== Container Status ==="
+                        docker-compose ps || true
+                        echo "=== Web Container Environment ==="
+                        docker-compose exec -T web env | grep -E "(DATABASE|FLASK)" || true
                     '''
                 }
             }
-            }
+        }
 
         stage('Push Docker Image') {
             steps {
