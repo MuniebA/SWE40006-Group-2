@@ -456,8 +456,8 @@ print("Terraform installed successfully!")
                     echo "🎯 Deploying to EC2 instance: $EC2_IP"
                     echo "📦 New Docker image: $DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG"
                     
-                    # Create deployment script that doesn't require AWS CLI
-                    cat > deploy_via_ssh.sh << 'EOF'
+                    # Create enhanced deployment script that handles Docker installation
+                    cat > deploy_with_docker_install.sh << 'EOF'
 #!/bin/bash
 set -e
 
@@ -466,25 +466,64 @@ CONTAINER_NAME="student-registration-app"
 
 echo "🚀 Starting deployment of $DOCKER_IMAGE"
 
-# Check Docker is accessible
-if ! docker ps &> /dev/null; then
-    echo "⚠️ Docker access issue. Trying to fix permissions..."
-    sudo usermod -aG docker $USER || echo "Could not add user to docker group"
-    sudo systemctl restart docker || echo "Could not restart docker"
-    sleep 10
-fi
+# Function to install Docker if needed
+install_docker_if_needed() {
+    if ! command -v docker &> /dev/null; then
+        echo "🔧 Docker not found. Installing Docker..."
+        
+        # Update system
+        sudo yum update -y
+        
+        # Install Docker
+        sudo dnf install -y docker git curl
+        
+        # Enable and start Docker
+        sudo systemctl enable --now docker
+        
+        # Add current user to docker group
+        sudo usermod -aG docker $USER
+        
+        # Install docker-compose
+        sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+        sudo chmod +x /usr/local/bin/docker-compose
+        
+        echo "✅ Docker installation completed"
+        
+        # Need to logout/login for group changes, so we'll use sudo for docker commands
+        USE_SUDO="sudo"
+    else
+        echo "✅ Docker is already installed"
+        
+        # Check if docker service is running
+        if ! sudo systemctl is-active --quiet docker; then
+            echo "🔄 Starting Docker service..."
+            sudo systemctl start docker
+        fi
+        
+        # Check if current user can run docker commands
+        if docker ps &> /dev/null; then
+            USE_SUDO=""
+        else
+            echo "ℹ️ Using sudo for Docker commands due to permissions"
+            USE_SUDO="sudo"
+        fi
+    fi
+}
+
+# Install Docker if needed
+install_docker_if_needed
 
 # Create network if it doesn't exist
-docker network create app-network || true
+$USE_SUDO docker network create app-network || true
 
 # Check if MySQL container exists and is running
-if ! docker ps --format 'table {{.Names}}' | grep -q mysql-prod; then
-    if docker ps -a --format 'table {{.Names}}' | grep -q mysql-prod; then
+if ! $USE_SUDO docker ps --format 'table {{.Names}}' | grep -q mysql-prod; then
+    if $USE_SUDO docker ps -a --format 'table {{.Names}}' | grep -q mysql-prod; then
         echo "🔄 Starting existing MySQL container..."
-        docker start mysql-prod
+        $USE_SUDO docker start mysql-prod
     else
         echo "🗄️ Creating MySQL production container..."
-        docker run -d \
+        $USE_SUDO docker run -d \
             --name mysql-prod \
             --network app-network \
             --restart always \
@@ -498,25 +537,25 @@ if ! docker ps --format 'table {{.Names}}' | grep -q mysql-prod; then
     
     # Wait for MySQL to be ready
     echo "⏳ Waiting for MySQL to be ready..."
-    sleep 30
+    sleep 45
 fi
 
 # Get current running image for rollback
-CURRENT_IMAGE=$(docker ps --filter "name=$CONTAINER_NAME" --format "table {{.Image}}" | tail -n +2 | head -1)
+CURRENT_IMAGE=$($USE_SUDO docker ps --filter "name=$CONTAINER_NAME" --format "table {{.Image}}" | tail -n +2 | head -1)
 echo "📋 Current image: $CURRENT_IMAGE"
 
 # Pull new image
 echo "⬇️ Pulling new image..."
-docker pull $DOCKER_IMAGE
+$USE_SUDO docker pull $DOCKER_IMAGE
 
 # Stop and remove old container
 echo "🛑 Stopping old container..."
-docker stop $CONTAINER_NAME || true
-docker rm $CONTAINER_NAME || true
+$USE_SUDO docker stop $CONTAINER_NAME || true
+$USE_SUDO docker rm $CONTAINER_NAME || true
 
 # Start new container
 echo "🔄 Starting new container..."
-docker run -d \
+$USE_SUDO docker run -d \
     --name $CONTAINER_NAME \
     --network app-network \
     --restart always \
@@ -527,19 +566,19 @@ docker run -d \
 
 # Wait for container to start
 echo "⏳ Waiting for application to start..."
-sleep 20
+sleep 30
 
 # Health check
 echo "🏥 Performing health check..."
-for i in {1..10}; do
+for i in {1..15}; do
     HEALTH_CHECK=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/ || echo "000")
     if [ "$HEALTH_CHECK" = "200" ]; then
         echo "✅ Health check passed! Deployment successful."
         echo "🗑️ Cleaning up old images..."
-        docker image prune -f
+        $USE_SUDO docker image prune -f
         exit 0
     else
-        echo "⚠️ Health check attempt $i/10 failed - Status: $HEALTH_CHECK"
+        echo "⚠️ Health check attempt $i/15 failed - Status: $HEALTH_CHECK"
         sleep 10
     fi
 done
@@ -547,13 +586,13 @@ done
 echo "❌ Health check failed! Rolling back..."
 
 # Stop failed container
-docker stop $CONTAINER_NAME || true
-docker rm $CONTAINER_NAME || true
+$USE_SUDO docker stop $CONTAINER_NAME || true
+$USE_SUDO docker rm $CONTAINER_NAME || true
 
 # Rollback to previous image
 if [ -n "$CURRENT_IMAGE" ] && [ "$CURRENT_IMAGE" != "REPOSITORY" ] && [ "$CURRENT_IMAGE" != "$DOCKER_IMAGE" ]; then
     echo "🔄 Rolling back to: $CURRENT_IMAGE"
-    docker run -d \
+    $USE_SUDO docker run -d \
         --name $CONTAINER_NAME \
         --network app-network \
         --restart always \
@@ -570,12 +609,12 @@ EOF
 
                     # Copy deployment script to EC2
                     echo "📤 Copying deployment script to EC2..."
-                    scp -i ~/.ssh/ec2-key.pem -o StrictHostKeyChecking=no deploy_via_ssh.sh ec2-user@$EC2_IP:/tmp/
+                    scp -i ~/.ssh/ec2-key.pem -o StrictHostKeyChecking=no deploy_with_docker_install.sh ec2-user@$EC2_IP:/tmp/
                     
                     # Execute deployment
                     echo "🚀 Executing deployment on EC2..."
                     ssh -i ~/.ssh/ec2-key.pem -o StrictHostKeyChecking=no ec2-user@$EC2_IP \
-                        "chmod +x /tmp/deploy_via_ssh.sh && /tmp/deploy_via_ssh.sh $DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG"
+                        "chmod +x /tmp/deploy_with_docker_install.sh && /tmp/deploy_with_docker_install.sh $DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG"
                     
                     echo "🎉 Deployment completed successfully!"
                     echo "🌐 Application URL: http://$EC2_IP/"
