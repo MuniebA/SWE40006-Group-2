@@ -399,7 +399,6 @@ resource "aws_instance" "monitor" {
 
   user_data = <<-EOF
     #!/bin/bash
-    set -euxo pipefail
 
     # Log everything
     exec > >(tee /var/log/user-data-monitor.log)
