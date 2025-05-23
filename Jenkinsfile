@@ -402,34 +402,32 @@ print("Terraform installed successfully!")
                     
                     echo "🔐 Setting up SSH access to EC2..."
                     
-                    # Create SSH directory for jenkins user if it doesn't exist
-                    sudo mkdir -p /var/lib/jenkins/.ssh
-                    sudo chown jenkins:jenkins /var/lib/jenkins/.ssh
-                    sudo chmod 700 /var/lib/jenkins/.ssh
+                    # Create SSH directory for jenkins user (no sudo needed)
+                    mkdir -p ~/.ssh
+                    chmod 700 ~/.ssh
                     
                     # Extract the private key from Terraform output
                     terraform output -raw private_key_content > ec2-private-key.pem
                     chmod 600 ec2-private-key.pem
                     
-                    # Copy key to Jenkins SSH directory
-                    sudo cp ec2-private-key.pem /var/lib/jenkins/.ssh/ec2-key.pem
-                    sudo chown jenkins:jenkins /var/lib/jenkins/.ssh/ec2-key.pem
-                    sudo chmod 600 /var/lib/jenkins/.ssh/ec2-key.pem
+                    # Copy key to Jenkins SSH directory (no sudo needed)
+                    cp ec2-private-key.pem ~/.ssh/ec2-key.pem
+                    chmod 600 ~/.ssh/ec2-key.pem
                     
                     # Get EC2 IP for verification
                     EC2_IP=$(terraform output -raw ec2_public_ip)
                     echo "✅ SSH key setup complete!"
                     echo "🌐 EC2 Instance IP: $EC2_IP"
-                    echo "🔐 SSH Key location: /var/lib/jenkins/.ssh/ec2-key.pem"
+                    echo "🔐 SSH Key location: ~/.ssh/ec2-key.pem"
                     
                     # Wait for EC2 to be fully ready
                     echo "⏳ Waiting for EC2 instance to be fully ready..."
                     sleep 60
                     
-                    # Test SSH connection
+                    # Test SSH connection (no sudo needed)
                     echo "🧪 Testing SSH connection..."
                     for i in {1..5}; do
-                        if sudo -u jenkins ssh -i /var/lib/jenkins/.ssh/ec2-key.pem -o StrictHostKeyChecking=no -o ConnectTimeout=10 ec2-user@$EC2_IP "echo 'SSH connection successful!'"; then
+                        if ssh -i ~/.ssh/ec2-key.pem -o StrictHostKeyChecking=no -o ConnectTimeout=10 ec2-user@$EC2_IP "echo 'SSH connection successful!'"; then
                             echo "✅ SSH connection established!"
                             break
                         else
@@ -444,11 +442,13 @@ print("Terraform installed successfully!")
         stage('Install AWS CLI') {
             steps {
                 sh '''#!/bin/bash
-                    # Install AWS CLI using curl method to avoid pip externally-managed-environment error
-                    echo "📦 Installing AWS CLI..."
+                    # Install AWS CLI in user directory (no sudo required)
+                    echo "📦 Installing AWS CLI to user directory..."
                     
                     if ! command -v aws &> /dev/null; then
-                        echo "Installing AWS CLI v2..."
+                        echo "Installing AWS CLI v2 to ~/.local/bin..."
+                        
+                        # Download AWS CLI
                         curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
                         
                         # Use Python to extract instead of unzip
@@ -459,22 +459,32 @@ with zipfile.ZipFile("awscliv2.zip", "r") as zip_ref:
     zip_ref.extractall(".")
 '
                         
-                        # Install AWS CLI
-                        sudo ./aws/install
+                        # Install AWS CLI to user directory
+                        mkdir -p ~/.local/bin
+                        ./aws/install --install-dir ~/.local/aws-cli --bin-dir ~/.local/bin
                         
                         # Clean up
                         rm -rf awscliv2.zip aws/
+                        
+                        # Add to PATH
+                        export PATH=~/.local/bin:$PATH
+                        echo 'export PATH=~/.local/bin:$PATH' >> ~/.bashrc
+                    else
+                        echo "AWS CLI already installed"
                     fi
                     
+                    # Make sure AWS CLI is in PATH
+                    export PATH=~/.local/bin:$PATH
+                    
                     # Verify AWS CLI installation
-                    aws --version
+                    ~/.local/bin/aws --version || aws --version
                     
                     # Test AWS credentials
                     export AWS_ACCESS_KEY_ID=$AWS_CREDENTIALS_USR
                     export AWS_SECRET_ACCESS_KEY=$AWS_CREDENTIALS_PSW
                     export AWS_DEFAULT_REGION=ap-southeast-1
                     
-                    aws sts get-caller-identity
+                    ~/.local/bin/aws sts get-caller-identity || aws sts get-caller-identity
                 '''
             }
         }
@@ -487,8 +497,8 @@ with zipfile.ZipFile("awscliv2.zip", "r") as zip_ref:
                     export AWS_SECRET_ACCESS_KEY=$AWS_CREDENTIALS_PSW
                     export AWS_DEFAULT_REGION=ap-southeast-1
                     
-                    # Use local Terraform installation
-                    export PATH=${WORKSPACE}/terraform:$PATH
+                    # Use local Terraform installation and local AWS CLI
+                    export PATH=${WORKSPACE}/terraform:~/.local/bin:$PATH
                     
                     # Get EC2 instance IP
                     EC2_IP=$(terraform output -raw ec2_public_ip)
@@ -510,8 +520,21 @@ CONTAINER_NAME="student-registration-app"
 
 echo "🚀 Starting deployment of $DOCKER_IMAGE"
 
-# Ensure Docker is running
-sudo systemctl start docker || true
+# Ensure Docker is running (no sudo needed - ec2-user is in docker group)
+systemctl is-active --quiet docker || {
+    echo "Docker is not running, but we can't start it without sudo"
+    echo "Checking if Docker daemon is accessible..."
+}
+
+# Test Docker access
+if ! docker ps &> /dev/null; then
+    echo "⚠️ Docker access issue. Trying to fix permissions..."
+    # Add current user to docker group (may need logout/login to take effect)
+    sudo usermod -aG docker $USER || echo "Could not add user to docker group"
+    # Try to restart docker service
+    sudo systemctl restart docker || echo "Could not restart docker"
+    sleep 10
+fi
 
 # Create network if it doesn't exist
 docker network create app-network || true
@@ -607,11 +630,11 @@ EOF
 
                     # Copy deployment script to EC2
                     echo "📤 Copying deployment script to EC2..."
-                    scp -i /var/lib/jenkins/.ssh/ec2-key.pem -o StrictHostKeyChecking=no deploy.sh ec2-user@$EC2_IP:/tmp/
+                    scp -i ~/.ssh/ec2-key.pem -o StrictHostKeyChecking=no deploy.sh ec2-user@$EC2_IP:/tmp/
                     
                     # Execute deployment
                     echo "🚀 Executing deployment on EC2..."
-                    ssh -i /var/lib/jenkins/.ssh/ec2-key.pem -o StrictHostKeyChecking=no ec2-user@$EC2_IP \
+                    ssh -i ~/.ssh/ec2-key.pem -o StrictHostKeyChecking=no ec2-user@$EC2_IP \
                         "chmod +x /tmp/deploy.sh && /tmp/deploy.sh $DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG"
                     
                     echo "🎉 Deployment completed successfully!"
