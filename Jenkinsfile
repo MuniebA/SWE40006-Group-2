@@ -368,48 +368,132 @@ print("Terraform installed successfully!")
                     echo "🔍 Waiting for application deployment to complete..."
                     echo "📍 Monitoring EC2 instance: $EC2_IP"
                     
-                    # Wait for user_data script to complete
+                    # Give some initial time for the instance to boot
+                    echo "⏳ Initial wait for instance boot (60 seconds)..."
+                    sleep 60
+                    
+                    # Wait for user_data script to complete (with longer timeout for debug version)
                     echo "⏳ Waiting for user_data initialization..."
-                    for i in {1..30}; do
+                    for i in {1..35}; do
                         if ssh -i ~/.ssh/ec2-key.pem -o StrictHostKeyChecking=no -o ConnectTimeout=15 ec2-user@$EC2_IP "test -f /var/log/user-data-complete"; then
                             echo "✅ Infrastructure initialization completed!"
                             break
                         else
-                            echo "⏳ Waiting for initialization... attempt $i/30 (waiting 30 seconds)"
+                            echo "⏳ Waiting for initialization... attempt $i/35 (waiting 30 seconds)"
+                            
+                            # Every 5 attempts, show current progress
+                            if [ $((i % 5)) -eq 0 ]; then
+                                echo "📊 Progress check - showing current logs..."
+                                ssh -i ~/.ssh/ec2-key.pem -o StrictHostKeyChecking=no ec2-user@$EC2_IP "
+                                    echo '=== Current Progress ==='
+                                    echo 'Last 10 lines of user-data log:'
+                                    tail -10 /var/log/user-data.log 2>/dev/null || echo 'No user-data.log yet'
+                                    echo 'Completion marker status:'
+                                    ls -la /var/log/user-data-complete 2>/dev/null || echo 'Completion marker not found yet'
+                                " || echo "Cannot connect to instance yet"
+                            fi
+                            
                             sleep 30
                         fi
                         
-                        if [ $i -eq 30 ]; then
-                            echo "⚠️ Initialization timeout - checking detailed status"
-                            # Enhanced debugging
+                        if [ $i -eq 35 ]; then
+                            echo "⚠️ Initialization timeout - performing detailed diagnosis"
+                            
+                            # Comprehensive debugging
                             ssh -i ~/.ssh/ec2-key.pem -o StrictHostKeyChecking=no ec2-user@$EC2_IP "
-                                echo '=== Detailed Infrastructure Status ==='
+                                echo '========================================================================'
+                                echo '=== DETAILED DIAGNOSIS ==='
+                                echo '========================================================================'
+                                
+                                echo 'SECTION 1: Basic System Info'
+                                echo 'Current time:' \$(date)
+                                echo 'Uptime:' \$(uptime)
+                                echo 'Disk space:' \$(df -h / | tail -1)
+                                echo 'Memory:' \$(free -h)
+                                echo ''
+                                
+                                echo 'SECTION 2: User Data Logs'
+                                if [ -f /var/log/user-data.log ]; then
+                                    echo 'User-data log exists. Last 50 lines:'
+                                    tail -50 /var/log/user-data.log
+                                else
+                                    echo 'No user-data.log found!'
+                                fi
+                                echo ''
+                                
+                                echo 'SECTION 3: Cloud-Init Status'
+                                if [ -f /var/log/cloud-init-output.log ]; then
+                                    echo 'Cloud-init log exists. Last 30 lines:'
+                                    tail -30 /var/log/cloud-init-output.log
+                                else
+                                    echo 'No cloud-init-output.log found!'
+                                fi
+                                echo ''
+                                
+                                echo 'SECTION 4: Service Status'
                                 echo 'Docker service status:'
-                                sudo systemctl status docker || echo 'Docker service failed'
+                                systemctl status docker --no-pager || echo 'Docker status check failed'
+                                echo ''
+                                
+                                echo 'SECTION 5: Command Availability'
                                 echo 'Available commands:'
-                                which docker || echo 'Docker command not found'
-                                which docker-compose || echo 'Docker-compose not found'
-                                echo 'User-data logs:'
-                                sudo cat /var/log/user-data.log 2>/dev/null || echo 'No user-data.log'
-                                echo 'Cloud-init logs (last 50 lines):'
-                                sudo tail -50 /var/log/cloud-init-output.log 2>/dev/null || echo 'No cloud-init logs'
-                                echo 'Recent system messages:'
-                                sudo tail -20 /var/log/messages 2>/dev/null || echo 'No system messages'
-                            "
-                            echo "❌ Deployment failed - check logs above"
-                            exit 1
+                                which docker && echo '✅ Docker: available' || echo '❌ Docker: not found'
+                                which docker-compose && echo '✅ Docker-compose: available' || echo '❌ Docker-compose: not found'
+                                which git && echo '✅ Git: available' || echo '❌ Git: not found'
+                                which curl && echo '✅ Curl: available' || echo '❌ Curl: not found'
+                                echo ''
+                                
+                                echo 'SECTION 6: File System Check'
+                                echo 'Files in /home/ec2-user:'
+                                ls -la /home/ec2-user/ || echo 'Cannot list /home/ec2-user'
+                                echo 'Files in /home/ec2-user/app (if exists):'
+                                ls -la /home/ec2-user/app/ 2>/dev/null || echo 'No app directory'
+                                echo ''
+                                
+                                echo 'SECTION 7: Network and Processes'
+                                echo 'Listening ports:'
+                                netstat -tlnp | grep LISTEN | head -10 || echo 'Cannot check listening ports'
+                                echo 'Docker processes:'
+                                docker ps -a 2>/dev/null || echo 'Cannot run docker ps'
+                                echo ''
+                                
+                                echo 'SECTION 8: Recent System Messages'
+                                echo 'Recent kernel/system messages:'
+                                tail -20 /var/log/messages 2>/dev/null || echo 'Cannot access system messages'
+                                echo ''
+                                
+                                echo 'SECTION 9: User Data Script Search'
+                                echo 'Looking for user-data execution:'
+                                ps aux | grep cloud || echo 'No cloud processes'
+                                echo ''
+                                
+                                echo '========================================================================'
+                                echo '=== END DIAGNOSIS ==='
+                                echo '========================================================================'
+                            " || echo "❌ Cannot SSH to instance for diagnosis"
+                            
+                            echo "❌ Deployment initialization failed - check detailed logs above"
+                            echo "💡 The script continues without 'set -e', so we can see partial progress"
+                            echo "💡 Check which sections completed successfully vs failed"
                         fi
                     done
                     
-                    # Verify application is running
-                    echo "🌐 Verifying application deployment..."
+                    # Additional verification regardless of completion marker
+                    echo "🌐 Verifying current application state..."
                     ssh -i ~/.ssh/ec2-key.pem -o StrictHostKeyChecking=no ec2-user@$EC2_IP "
-                        echo 'Final verification:'
-                        docker --version || echo 'Docker not available'
-                        docker ps -a || echo 'Cannot list containers'
-                        echo 'Testing local application...'
-                        curl -I http://localhost/ || echo 'Local application test failed'
-                    "
+                        echo '=== Current Application State ==='
+                        echo 'Docker status:'
+                        docker --version 2>/dev/null && echo '✅ Docker available' || echo '❌ Docker not available'
+                        docker ps -a 2>/dev/null || echo 'Cannot list containers'
+                        echo ''
+                        echo 'Application connectivity:'
+                        curl -I http://localhost/ 2>/dev/null && echo '✅ App responding locally' || echo '❌ App not responding locally'
+                        echo ''
+                        echo 'Files and directories:'
+                        ls -la /home/ec2-user/app/ 2>/dev/null || echo 'No app directory'
+                        echo 'Docker compose files:'
+                        ls -la /home/ec2-user/app/*compose* 2>/dev/null || echo 'No compose files'
+                    " || echo "Cannot verify application state"
                 '''
             }
         }

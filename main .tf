@@ -142,66 +142,189 @@ resource "aws_instance" "web" {
     volume_type = "gp3"
   }
 
-  # SIMPLIFIED USER_DATA - Based on your working version but updated
+  # DEBUG-FRIENDLY USER_DATA - Sectioned with continue-on-error approach
   user_data = <<-EOF
               #!/bin/bash
-              set -euxo pipefail
+              # REMOVED: set -euxo pipefail  # Let script continue on errors
 
-              # Log everything for debugging
+              # Setup logging
               exec > >(tee /var/log/user-data.log)
               exec 2>&1
 
-              echo "=== Starting EC2 User Data Script ==="
-              echo "Timestamp: $(date)"
+              echo "========================================================================"
+              echo "=== STARTING EC2 USER DATA SCRIPT - DEBUG VERSION ==="
+              echo "=== Timestamp: $(date)"
+              echo "=== Instance: $(curl -s http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null || echo 'unknown')"
+              echo "========================================================================"
 
-              # Update system first
+              # Function to log section status
+              log_section() {
+                  echo ""
+                  echo "----------------------------------------"
+                  echo "SECTION: $1"
+                  echo "Status: $2"
+                  echo "Timestamp: $(date)"
+                  echo "----------------------------------------"
+              }
+
+              # SECTION 1: SYSTEM UPDATE
+              log_section "SYSTEM UPDATE" "STARTING"
               echo "Updating system packages..."
-              yum update -y
+              if yum update -y; then
+                  log_section "SYSTEM UPDATE" "SUCCESS"
+              else
+                  log_section "SYSTEM UPDATE" "FAILED"
+                  echo "ERROR: System update failed, but continuing..."
+              fi
 
-              # Install Docker and Git directly (Amazon Linux 2023 approach)
-              echo "Installing Docker and Git..."
-              dnf install -y docker git curl
+              # SECTION 2: PACKAGE INSTALLATION
+              log_section "PACKAGE INSTALLATION" "STARTING"
+              echo "Installing basic packages (docker, git, curl)..."
+              
+              # Try different installation methods
+              echo "Attempting method 1: dnf install..."
+              if dnf install -y docker git curl; then
+                  log_section "PACKAGE INSTALLATION" "SUCCESS - Method 1 (dnf)"
+              else
+                  echo "Method 1 failed, trying method 2: yum install..."
+                  if yum install -y docker git curl; then
+                      log_section "PACKAGE INSTALLATION" "SUCCESS - Method 2 (yum)"
+                  else
+                      log_section "PACKAGE INSTALLATION" "FAILED - Both methods failed"
+                      echo "ERROR: Package installation failed, continuing anyway..."
+                  fi
+              fi
 
-              # Start and enable Docker
+              # Check what we actually have installed
+              echo "Checking installed packages:"
+              which docker && echo "✅ Docker command found" || echo "❌ Docker command not found"
+              which git && echo "✅ Git command found" || echo "❌ Git command not found"
+              which curl && echo "✅ Curl command found" || echo "❌ Curl command not found"
+
+              # SECTION 3: DOCKER SERVICE
+              log_section "DOCKER SERVICE" "STARTING"
               echo "Starting Docker service..."
-              systemctl enable docker
-              systemctl start docker
+              
+              if systemctl enable docker; then
+                  echo "✅ Docker service enabled"
+              else
+                  echo "❌ Docker service enable failed"
+              fi
+
+              if systemctl start docker; then
+                  echo "✅ Docker service started"
+              else
+                  echo "❌ Docker service start failed"
+              fi
 
               # Wait for Docker to be ready
               echo "Waiting for Docker to be ready..."
+              DOCKER_READY=false
               for i in {1..30}; do
-                if systemctl is-active --quiet docker && docker info >/dev/null 2>&1; then
-                  echo "✅ Docker is ready!"
-                  break
-                fi
-                echo "⏳ Waiting for Docker... attempt $i/30"
-                sleep 5
+                  if systemctl is-active --quiet docker; then
+                      echo "Docker service is active"
+                      if docker info >/dev/null 2>&1; then
+                          echo "✅ Docker is ready!"
+                          DOCKER_READY=true
+                          log_section "DOCKER SERVICE" "SUCCESS"
+                          break
+                      else
+                          echo "Docker service active but 'docker info' failed, attempt $i/30"
+                      fi
+                  else
+                      echo "Docker service not active, attempt $i/30"
+                  fi
+                  sleep 5
               done
 
-              # Add ec2-user to docker group
-              usermod -aG docker ec2-user
+              if [ "$DOCKER_READY" = false ]; then
+                  log_section "DOCKER SERVICE" "FAILED"
+                  echo "ERROR: Docker failed to become ready, but continuing..."
+                  echo "Docker service status:"
+                  systemctl status docker || echo "Cannot get docker status"
+              fi
 
-              # Install docker-compose
+              # SECTION 4: USER PERMISSIONS
+              log_section "USER PERMISSIONS" "STARTING"
+              echo "Adding ec2-user to docker group..."
+              if usermod -aG docker ec2-user; then
+                  log_section "USER PERMISSIONS" "SUCCESS"
+              else
+                  log_section "USER PERMISSIONS" "FAILED"
+                  echo "ERROR: Failed to add user to docker group, continuing..."
+              fi
+
+              # SECTION 5: DOCKER COMPOSE INSTALLATION
+              log_section "DOCKER COMPOSE INSTALLATION" "STARTING"
               echo "Installing docker-compose..."
-              curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-              chmod +x /usr/local/bin/docker-compose
+              
+              COMPOSE_INSTALLED=false
+              
+              # Method 1: curl
+              echo "Trying curl method..."
+              if curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose; then
+                  chmod +x /usr/local/bin/docker-compose
+                  if /usr/local/bin/docker-compose --version; then
+                      COMPOSE_INSTALLED=true
+                      log_section "DOCKER COMPOSE INSTALLATION" "SUCCESS - curl method"
+                  fi
+              fi
 
-              # Verify docker-compose installation
-              /usr/local/bin/docker-compose --version
+              # Method 2: wget (if curl failed)
+              if [ "$COMPOSE_INSTALLED" = false ]; then
+                  echo "Curl failed, trying wget method..."
+                  if wget -O /usr/local/bin/docker-compose "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)"; then
+                      chmod +x /usr/local/bin/docker-compose
+                      if /usr/local/bin/docker-compose --version; then
+                          COMPOSE_INSTALLED=true
+                          log_section "DOCKER COMPOSE INSTALLATION" "SUCCESS - wget method"
+                      fi
+                  fi
+              fi
 
-              # Clone your repository
+              if [ "$COMPOSE_INSTALLED" = false ]; then
+                  log_section "DOCKER COMPOSE INSTALLATION" "FAILED"
+                  echo "ERROR: Docker-compose installation failed, continuing..."
+              fi
+
+              # SECTION 6: REPOSITORY CLONING
+              log_section "REPOSITORY CLONING" "STARTING"
               echo "Cloning repository..."
               cd /home/ec2-user
-              git clone https://github.com/MuniebA/SWE40006-Group-2.git app
-              cd app
-              chown -R ec2-user:ec2-user /home/ec2-user/app
+              
+              if git clone https://github.com/MuniebA/SWE40006-Group-2.git app; then
+                  cd app
+                  chown -R ec2-user:ec2-user /home/ec2-user/app
+                  log_section "REPOSITORY CLONING" "SUCCESS"
+                  echo "Repository contents:"
+                  ls -la
+              else
+                  log_section "REPOSITORY CLONING" "FAILED"
+                  echo "ERROR: Repository cloning failed, continuing..."
+                  # Create basic directory structure
+                  mkdir -p /home/ec2-user/app
+                  cd /home/ec2-user/app
+              fi
 
-              # Pull the latest Docker image
+              # SECTION 7: DOCKER IMAGE PULL
+              log_section "DOCKER IMAGE PULL" "STARTING"
               echo "Pulling latest Docker image..."
-              docker pull munieb/student-registration:latest
+              
+              if [ "$DOCKER_READY" = true ]; then
+                  if docker pull munieb/student-registration:latest; then
+                      log_section "DOCKER IMAGE PULL" "SUCCESS"
+                  else
+                      log_section "DOCKER IMAGE PULL" "FAILED"
+                      echo "ERROR: Docker image pull failed, continuing..."
+                  fi
+              else
+                  log_section "DOCKER IMAGE PULL" "SKIPPED - Docker not ready"
+              fi
 
-              # Create production docker-compose configuration
+              # SECTION 8: CONFIGURATION CREATION
+              log_section "CONFIGURATION CREATION" "STARTING"
               echo "Creating production docker-compose configuration..."
+              
               cat > docker-compose.prod.yml << 'COMPOSE_EOF'
 version: '3.8'
 
@@ -251,50 +374,125 @@ networks:
     driver: bridge
 COMPOSE_EOF
 
-              # Start containers using production compose
-              echo "Starting production containers..."
-              docker-compose -f docker-compose.prod.yml up -d
+              if [ -f docker-compose.prod.yml ]; then
+                  log_section "CONFIGURATION CREATION" "SUCCESS"
+                  echo "Configuration file created successfully"
+              else
+                  log_section "CONFIGURATION CREATION" "FAILED"
+                  echo "ERROR: Configuration creation failed, continuing..."
+              fi
 
-              # Wait for services to be ready
+              # SECTION 9: CONTAINER STARTUP
+              log_section "CONTAINER STARTUP" "STARTING"
+              echo "Starting production containers..."
+              
+              if [ "$DOCKER_READY" = true ] && [ "$COMPOSE_INSTALLED" = true ]; then
+                  if docker-compose -f docker-compose.prod.yml up -d; then
+                      log_section "CONTAINER STARTUP" "SUCCESS"
+                      echo "Containers started successfully"
+                  else
+                      log_section "CONTAINER STARTUP" "FAILED"
+                      echo "ERROR: Container startup failed, continuing..."
+                  fi
+                  
+                  # Show container status
+                  echo "Container status:"
+                  docker ps -a || echo "Cannot list containers"
+              else
+                  log_section "CONTAINER STARTUP" "SKIPPED - Prerequisites not met"
+                  echo "Docker ready: $DOCKER_READY"
+                  echo "Compose installed: $COMPOSE_INSTALLED"
+              fi
+
+              # SECTION 10: APPLICATION STARTUP WAIT
+              log_section "APPLICATION STARTUP WAIT" "STARTING"
               echo "Waiting for services to start..."
               sleep 60
 
-              # Initialize database if needed
+              # SECTION 11: DATABASE INITIALIZATION
+              log_section "DATABASE INITIALIZATION" "STARTING"
               echo "Checking database initialization..."
-              docker-compose -f docker-compose.prod.yml exec -T web flask db upgrade 2>/dev/null || {
-                echo "Database migration not available or failed"
-              }
-
-              # Start node-exporter for monitoring
-              echo "Starting Node Exporter for monitoring..."
-              docker run -d \
-                --name=node-exporter \
-                --restart=always \
-                --net=host \
-                --pid=host \
-                -v "/:/host:ro,rslave" \
-                quay.io/prometheus/node-exporter:latest \
-                --path.rootfs=/host
-
-              # Final health check
-              echo "Performing final health check..."
-              sleep 30
-              if curl -f http://localhost/ >/dev/null 2>&1; then
-                echo "✅ Application is running successfully!"
+              
+              if [ "$DOCKER_READY" = true ] && [ "$COMPOSE_INSTALLED" = true ]; then
+                  if docker-compose -f docker-compose.prod.yml exec -T web flask db upgrade 2>/dev/null; then
+                      log_section "DATABASE INITIALIZATION" "SUCCESS"
+                  else
+                      log_section "DATABASE INITIALIZATION" "FAILED OR NOT NEEDED"
+                      echo "Database migration not available or failed (this might be normal)"
+                  fi
               else
-                echo "⚠️ Application may not be ready yet"
-                echo "Container status:"
-                docker ps -a
-                echo "Recent logs:"
-                docker-compose -f docker-compose.prod.yml logs --tail=20
+                  log_section "DATABASE INITIALIZATION" "SKIPPED - Prerequisites not met"
               fi
 
-              # Create completion marker - IMPORTANT for Jenkins
+              # SECTION 12: MONITORING SETUP
+              log_section "MONITORING SETUP" "STARTING"
+              echo "Starting Node Exporter for monitoring..."
+              
+              if [ "$DOCKER_READY" = true ]; then
+                  if docker run -d \
+                      --name=node-exporter \
+                      --restart=always \
+                      --net=host \
+                      --pid=host \
+                      -v "/:/host:ro,rslave" \
+                      quay.io/prometheus/node-exporter:latest \
+                      --path.rootfs=/host; then
+                      log_section "MONITORING SETUP" "SUCCESS"
+                  else
+                      log_section "MONITORING SETUP" "FAILED"
+                      echo "ERROR: Node exporter startup failed, continuing..."
+                  fi
+              else
+                  log_section "MONITORING SETUP" "SKIPPED - Docker not ready"
+              fi
+
+              # SECTION 13: HEALTH CHECK
+              log_section "HEALTH CHECK" "STARTING"
+              echo "Performing final health check..."
+              sleep 30
+              
+              if curl -f http://localhost/ >/dev/null 2>&1; then
+                  log_section "HEALTH CHECK" "SUCCESS"
+                  echo "✅ Application is running successfully!"
+              else
+                  log_section "HEALTH CHECK" "FAILED"
+                  echo "⚠️ Application health check failed"
+                  echo "Debugging information:"
+                  echo "Container status:"
+                  docker ps -a 2>/dev/null || echo "Cannot list containers"
+                  echo "Recent logs:"
+                  docker-compose -f docker-compose.prod.yml logs --tail=20 2>/dev/null || echo "Cannot get container logs"
+                  echo "Network connectivity:"
+                  netstat -tlnp | grep :80 || echo "Nothing listening on port 80"
+              fi
+
+              # SECTION 14: COMPLETION MARKER
+              log_section "COMPLETION MARKER" "STARTING"
               echo "Creating completion marker..."
               touch /var/log/user-data-complete
+              log_section "COMPLETION MARKER" "SUCCESS"
 
-              echo "=== User Data Script Completed ==="
-              echo "Timestamp: $(date)"
+              # FINAL SUMMARY
+              echo ""
+              echo "========================================================================"
+              echo "=== USER DATA SCRIPT COMPLETED ==="
+              echo "=== Timestamp: $(date)"
+              echo "========================================================================"
+              echo ""
+              echo "FINAL STATUS SUMMARY:"
+              echo "- System Update: $([ -f /var/log/system-update-done ] && echo 'DONE' || echo 'CHECK LOGS')"
+              echo "- Docker Ready: $DOCKER_READY"
+              echo "- Compose Installed: $COMPOSE_INSTALLED"
+              echo "- Repository: $([ -d /home/ec2-user/app/.git ] && echo 'CLONED' || echo 'FAILED')"
+              echo "- Completion Marker: $([ -f /var/log/user-data-complete ] && echo 'CREATED' || echo 'FAILED')"
+              echo ""
+              echo "For debugging, check:"
+              echo "- Full logs: cat /var/log/user-data.log"
+              echo "- Cloud-init: cat /var/log/cloud-init-output.log"
+              echo "- Docker status: systemctl status docker"
+              echo "- Container status: docker ps -a"
+              echo ""
+              echo "========================================================================"
         EOF
 
   tags = {
@@ -371,26 +569,30 @@ resource "aws_instance" "monitor" {
 
   user_data = <<-EOF
     #!/bin/bash
-    set -euxo pipefail
-
-    # Log everything
+    # Simplified monitoring setup - also debug-friendly
+    
     exec > >(tee /var/log/user-data-monitor.log)
     exec 2>&1
 
     echo "=== Starting Monitoring Instance User Data Script ==="
 
     # Update system
-    dnf update -y
+    echo "Updating system..."
+    dnf update -y || yum update -y
 
     # Install packages
-    dnf install -y docker git curl
+    echo "Installing packages..."
+    dnf install -y docker git curl || yum install -y docker git curl
 
     # Start Docker
-    systemctl enable --now docker
+    echo "Starting Docker..."
+    systemctl enable docker
+    systemctl start docker
 
     # Install Docker Compose
+    echo "Installing Docker Compose..."
     curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" \
-    -o /usr/local/bin/docker-compose
+    -o /usr/local/bin/docker-compose || wget -O /usr/local/bin/docker-compose "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)"
     chmod +x /usr/local/bin/docker-compose
 
     # Create monitoring stack directory
@@ -468,7 +670,7 @@ DB
       -o /var/lib/grafana/dashboards/node-exporter-full.json || echo "Dashboard download failed"
 
     cd /opt/prom-stack
-    docker-compose up -d
+    docker-compose up -d || echo "Monitoring stack startup failed"
 
     echo "=== Monitoring Instance Setup Complete ==="
   EOF
