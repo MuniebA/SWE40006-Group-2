@@ -116,84 +116,82 @@ pipeline {
         
         stage('Docker Tests') {
             steps {
-                sh '''
-                    # Clean up any existing containers that might be using ports
+                sh '''#!/bin/bash
                     echo "🧹 Cleaning up any existing containers..."
-                    docker-compose down -v || true
-                    
-                    # Remove any orphaned containers that might be using our ports
+                    docker-compose down -v
                     docker container prune -f
                     
-                    # Start Docker Compose (no port conflicts since MySQL port not exposed)
-                    echo "🚀 Starting Docker Compose services..."
+                    echo "🚀 Starting Docker Compose services (internal networking only)..."
                     docker-compose up -d
                     
-                    echo "⏳ Waiting for MySQL to initialize..."
-                    sleep 30
+                    echo "⏳ Waiting for services to be ready..."
                     
-                    # Wait for MySQL to be ready with retry logic
-                    echo "🔍 Checking MySQL readiness..."
-                    for i in {1..15}; do
-                        if docker-compose exec -T db mysqladmin ping -h localhost -u root -prootpassword --silent; then
-                            echo "✅ MySQL is ready!"
+                    # Wait for MySQL to be healthy
+                    echo "📊 Checking MySQL health..."
+                    for i in {1..20}; do
+                        if docker-compose exec -T db mysqladmin ping -h localhost -u testuser -ptestpass --silent; then
+                            echo "✅ MySQL is healthy (attempt $i)"
                             break
                         else
-                            echo "⏳ MySQL not ready yet (attempt $i/15), waiting 8 seconds..."
-                            sleep 8
+                            echo "⏳ MySQL not ready yet (attempt $i/20), waiting 10 seconds..."
+                            sleep 10
                         fi
                         
-                        if [ $i -eq 15 ]; then
-                            echo "❌ MySQL failed to start after 2 minutes"
-                            echo "📋 Container logs:"
+                        if [ $i -eq 20 ]; then
+                            echo "❌ MySQL failed to become healthy"
                             docker-compose logs db
                             exit 1
                         fi
                     done
                     
-                    # Additional wait for web app to start
-                    echo "⏳ Waiting for web application to start..."
-                    sleep 15
+                    # Wait for web application to be healthy  
+                    echo "🌐 Checking web application health..."
+                    for i in {1..15}; do
+                        if docker-compose exec -T web curl -f http://localhost:5000/ --silent; then
+                            echo "✅ Web application is healthy (attempt $i)"
+                            break
+                        else
+                            echo "⏳ Web application not ready yet (attempt $i/15), waiting 10 seconds..."
+                            sleep 10
+                        fi
+                        
+                        if [ $i -eq 15 ]; then
+                            echo "❌ Web application failed to become healthy"
+                            docker-compose logs web
+                            exit 1
+                        fi
+                    done
                     
                     # Show running containers
                     echo "📋 Container status:"
                     docker-compose ps
                     
-                    # Test database connection in container
-                    echo "🧪 Testing database connection in container:"
+                    # Test database connection from web container
+                    echo "🔍 Testing database connection from web container..."
                     docker-compose exec -T web python -c "
 from app import create_app, db
 from sqlalchemy import text
-app = create_app('testing')
-with app.app_context():
-    try:
-        db.session.execute(text('SELECT 1'))
-        print('✅ Database connection successful')
-    except Exception as e:
-        print('❌ Database connection failed:', e)
-        raise e
-" || echo "⚠️ Database connection test failed, but continuing..."
+import sys
+
+try:
+    app = create_app('testing')
+    with app.app_context():
+        result = db.session.execute(text('SELECT 1 as test')).fetchone()
+        if result and result[0] == 1:
+            print('✅ Database connection successful')
+        else:
+            print('❌ Database query failed')
+            sys.exit(1)
+except Exception as e:
+    print(f'❌ Database connection failed: {e}')
+    sys.exit(1)
+"
                     
-                    # Test if web app is responding
-                    echo "🌐 Testing web application response:"
-                    for i in {1..10}; do
-                        if curl -f -s http://localhost:5000/ > /dev/null; then
-                            echo "✅ Web application is responding!"
-                            break
-                        else
-                            echo "⏳ Web app not ready yet (attempt $i/10), waiting 5 seconds..."
-                            sleep 5
-                        fi
-                        
-                        if [ $i -eq 10 ]; then
-                            echo "❌ Web application failed to respond"
-                            echo "📋 Web container logs:"
-                            docker-compose logs web
-                        fi
-                    done
+                    # Run pytest Docker tests
+                    echo "🔬 Running Docker-specific tests..."
+                    . venv/bin/activate && python -m pytest tests/ -v -k docker --tb=short
                     
-                    # Run the Docker tests
-                    echo "🧪 Running Docker-specific tests..."
-                    . venv/bin/activate && python -m pytest tests/ -v -k docker
+                    echo "✅ All Docker tests passed successfully!"
                 '''
             }
             post {
@@ -201,6 +199,7 @@ with app.app_context():
                     sh '''
                         echo "🧹 Cleaning up Docker containers..."
                         docker-compose down -v
+                        docker container prune -f
                     '''
                 }
                 failure {
@@ -370,13 +369,9 @@ print("Terraform installed successfully!")
         stage('Install AWS CLI') {
             steps {
                 sh '''#!/bin/bash
-                    # Install AWS CLI using apt instead of pip to avoid externally-managed-environment error
-                    echo "📦 Installing AWS CLI using system package manager..."
+                    # Install AWS CLI using curl method to avoid pip externally-managed-environment error
+                    echo "📦 Installing AWS CLI..."
                     
-                    # Update package list
-                    sudo apt update
-                    
-                    # Install AWS CLI v2 using apt
                     if ! command -v aws &> /dev/null; then
                         echo "Installing AWS CLI v2..."
                         curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
@@ -597,7 +592,6 @@ EOF
                 docker-compose down -v || true
                 docker system prune -f || true
             '''
-            // cleanWs()
         }
         
         success {

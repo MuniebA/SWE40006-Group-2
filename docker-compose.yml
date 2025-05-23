@@ -1,8 +1,7 @@
 services:
   web:
     build: .
-    ports:
-      - "5000:5000"
+    # REMOVED: ports section - no host port binding for tests
     environment:
       - FLASK_CONFIG=testing
       - FLASK_APP=run.py
@@ -15,6 +14,12 @@ services:
       - .:/app
     networks:
       - app-network
+    # Health check for internal testing
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/", "||", "exit", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   db:
     image: mysql:8.0
@@ -23,18 +28,19 @@ services:
       - MYSQL_DATABASE=testdb
       - MYSQL_USER=testuser
       - MYSQL_PASSWORD=testpass
-    # ports:
-    #   - "3307:3306"  # CHANGE THIS LINE: Map to port 3307 on host instead of 3306
+    # REMOVED: ports section - no host port binding for tests
     volumes:
       - mysql-data:/var/lib/mysql
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
-    # healthcheck:
-    #   test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "testuser", "-ptestpass"]
-    #   interval: 5s
-    #   timeout: 5s
-    #   retries: 5
     networks:
       - app-network
+    # Fixed health check with proper timing
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "testuser", "-ptestpass"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
 
 volumes:
   mysql-data:
