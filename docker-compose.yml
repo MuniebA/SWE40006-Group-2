@@ -23,8 +23,8 @@ services:
       - MYSQL_DATABASE=testdb
       - MYSQL_USER=testuser
       - MYSQL_PASSWORD=testpass
-    ports:
-      - "3307:3306"  # CHANGE THIS LINE: Map to port 3307 on host instead of 3306
+    # ports:
+    #   - "3307:3306"  # CHANGE THIS LINE: Map to port 3307 on host instead of 3306
     volumes:
       - mysql-data:/var/lib/mysql
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql

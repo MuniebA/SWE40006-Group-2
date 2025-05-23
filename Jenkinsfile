@@ -117,42 +117,49 @@ pipeline {
         stage('Docker Tests') {
             steps {
                 sh '''
-                    # Check if port 3306 is in use
-                    if netstat -tuln | grep -q ":3306"; then
-                        echo "Port 3306 is already in use. Modifying docker-compose.yml to use port 3307 instead..."
-                        sed -i 's/"3306:3306"/"3307:3306"/g' docker-compose.yml
-                    fi
+                    # Clean up any existing containers that might be using ports
+                    echo "🧹 Cleaning up any existing containers..."
+                    docker-compose down -v || true
                     
-                    # Bring down any existing containers
-                    docker-compose down -v
+                    # Remove any orphaned containers that might be using our ports
+                    docker container prune -f
                     
-                    # Start Docker Compose with database and web app
+                    # Start Docker Compose (no port conflicts since MySQL port not exposed)
+                    echo "🚀 Starting Docker Compose services..."
                     docker-compose up -d
                     
-                    echo "Waiting for MySQL to initialize..."
+                    echo "⏳ Waiting for MySQL to initialize..."
                     sleep 30
                     
                     # Wait for MySQL to be ready with retry logic
-                    echo "Checking MySQL readiness..."
-                    for i in {1..12}; do
+                    echo "🔍 Checking MySQL readiness..."
+                    for i in {1..15}; do
                         if docker-compose exec -T db mysqladmin ping -h localhost -u root -prootpassword --silent; then
                             echo "✅ MySQL is ready!"
                             break
                         else
-                            echo "⏳ MySQL not ready yet (attempt $i/12), waiting 10 seconds..."
-                            sleep 10
+                            echo "⏳ MySQL not ready yet (attempt $i/15), waiting 8 seconds..."
+                            sleep 8
+                        fi
+                        
+                        if [ $i -eq 15 ]; then
+                            echo "❌ MySQL failed to start after 2 minutes"
+                            echo "📋 Container logs:"
+                            docker-compose logs db
+                            exit 1
                         fi
                     done
                     
                     # Additional wait for web app to start
-                    echo "Waiting for web application to start..."
+                    echo "⏳ Waiting for web application to start..."
                     sleep 15
                     
                     # Show running containers
+                    echo "📋 Container status:"
                     docker-compose ps
                     
                     # Test database connection in container
-                    echo "Testing database connection in container:"
+                    echo "🧪 Testing database connection in container:"
                     docker-compose exec -T web python -c "
 from app import create_app, db
 from sqlalchemy import text
@@ -163,15 +170,44 @@ with app.app_context():
         print('✅ Database connection successful')
     except Exception as e:
         print('❌ Database connection failed:', e)
-" || true
+        raise e
+" || echo "⚠️ Database connection test failed, but continuing..."
+                    
+                    # Test if web app is responding
+                    echo "🌐 Testing web application response:"
+                    for i in {1..10}; do
+                        if curl -f -s http://localhost:5000/ > /dev/null; then
+                            echo "✅ Web application is responding!"
+                            break
+                        else
+                            echo "⏳ Web app not ready yet (attempt $i/10), waiting 5 seconds..."
+                            sleep 5
+                        fi
+                        
+                        if [ $i -eq 10 ]; then
+                            echo "❌ Web application failed to respond"
+                            echo "📋 Web container logs:"
+                            docker-compose logs web
+                        fi
+                    done
                     
                     # Run the Docker tests
+                    echo "🧪 Running Docker-specific tests..."
                     . venv/bin/activate && python -m pytest tests/ -v -k docker
                 '''
             }
             post {
                 always {
-                    sh 'docker-compose down -v'
+                    sh '''
+                        echo "🧹 Cleaning up Docker containers..."
+                        docker-compose down -v
+                    '''
+                }
+                failure {
+                    sh '''
+                        echo "❌ Docker tests failed! Capturing logs for debugging..."
+                        docker-compose logs || true
+                    '''
                 }
             }
         }
