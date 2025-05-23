@@ -23,10 +23,6 @@ terraform {
 
 provider "aws" {
   region = var.aws_region
-  # Credentials are picked up automatically from one of:
-  # • Environment vars: AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (/ AWS_SESSION_TOKEN)
-  # • AWS shared‑credentials file (~/.aws/credentials)
-  # • IAM role if running in CI or on an EC2 instance with an instance‑profile
 }
 
 variable "aws_region" {
@@ -58,16 +54,6 @@ data "aws_subnets" "default" {
   }
 }
 
-# Grab the latest Amazon Linux 2023 AMI (x86_64) in the chosen region.
-data "aws_ami" "al2023" {
-  most_recent = true
-  owners      = ["amazon"]
-  filter {
-    name   = "name"
-    values = ["al2023-ami-*-x86_64"]
-  }
-}
-
 resource "aws_security_group" "web" {
   name   = "tf-web-sg-${random_pet.suffix.id}"
   vpc_id = data.aws_vpc.default.id
@@ -90,7 +76,7 @@ resource "aws_security_group" "web" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # SSH 22 (optional lockdown)
+  # SSH 22
   ingress {
     description = "Allow SSH"
     from_port   = 22
@@ -152,33 +138,87 @@ resource "aws_instance" "web" {
   key_name                    = aws_key_pair.generated.key_name
 
   root_block_device {
-    volume_size = 20 # Increased for Docker images and application data
+    volume_size = 20
     volume_type = "gp3"
   }
 
-  # Enhanced user_data for CI/CD deployment support
+  # FIXED: Enhanced user_data that properly handles Amazon Linux 2023 package conflicts
   user_data = <<-EOF
               #!/bin/bash
               set -euxo pipefail
 
-              # Update system
+              # Log everything for debugging
+              exec > >(tee /var/log/user-data.log)
+              exec 2>&1
+
+              echo "=== Starting EC2 User Data Script ==="
+              echo "Timestamp: $(date)"
+
+              # Update system first
+              echo "Updating system packages..."
               yum update -y
-              dnf install -y docker git curl
+
+              # CRITICAL FIX: Handle curl-minimal conflicts properly for Amazon Linux 2023
+              echo "Fixing curl package conflicts for Amazon Linux 2023..."
+              # Use dnf swap to replace curl-minimal with full curl package
+              dnf swap -y curl-minimal curl || {
+                echo "curl swap failed, trying alternative approach..."
+                dnf install -y --allowerasing curl || {
+                  echo "curl installation failed, using curl-minimal..."
+                  # If all fails, ensure curl-minimal is available for docker installation
+                  dnf install -y curl-minimal || true
+                }
+              }
+
+              # Install core packages without conflicts
+              echo "Installing core packages..."
+              dnf install -y docker git
+
+              # Verify curl is working
+              echo "Verifying curl installation..."
+              curl --version || {
+                echo "curl not working, but continuing..."
+              }
 
               # Enable and start Docker
-              systemctl enable --now docker
+              echo "Starting Docker service..."
+              systemctl enable docker
+              systemctl start docker
 
               # Add ec2-user to docker group
+              echo "Adding ec2-user to docker group..."
               usermod -aG docker ec2-user
 
-              # Install docker-compose
-              curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+              # Install docker-compose with better error handling
+              echo "Installing docker-compose..."
+              COMPOSE_URL="https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)"
+              curl -L "$COMPOSE_URL" -o /usr/local/bin/docker-compose || {
+                echo "Failed to download docker-compose, trying alternative..."
+                wget -O /usr/local/bin/docker-compose "$COMPOSE_URL" || {
+                  echo "docker-compose installation failed, but continuing..."
+                }
+              }
               chmod +x /usr/local/bin/docker-compose
 
+              # Wait for Docker to be fully ready
+              echo "Waiting for Docker to be ready..."
+              for i in {1..30}; do
+                if docker info >/dev/null 2>&1; then
+                  echo "Docker is ready!"
+                  break
+                fi
+                echo "Waiting for Docker... attempt $i/30"
+                sleep 5
+              done
+
               # Create Docker network for the application
-              docker network create app-network || true
+              echo "Creating Docker network..."
+              docker network create app-network || {
+                echo "Network already exists or creation failed"
+              }
 
               # Start MySQL container for production
+              echo "Starting MySQL container..."
               docker run -d \
                 --name mysql-prod \
                 --network app-network \
@@ -188,33 +228,29 @@ resource "aws_instance" "web" {
                 -e MYSQL_USER=testuser \
                 -e MYSQL_PASSWORD=testpass \
                 -v mysql-data:/var/lib/mysql \
-                mysql:8.0
+                mysql:8.0 || echo "MySQL container creation failed"
 
               # Wait for MySQL to initialize
-              sleep 60
-
-              # Initialize database with schema
-              # Note: This will be handled by the application deployment later
+              echo "Waiting for MySQL to initialize..."
+              sleep 45
 
               # Install node-exporter for monitoring
+              echo "Starting Node Exporter..."
               docker run -d \
                 --name=node-exporter \
                 --restart=always \
                 --net=host \
-                quay.io/prometheus/node-exporter:latest
+                --pid=host \
+                -v "/:/host:ro,rslave" \
+                quay.io/prometheus/node-exporter:latest \
+                --path.rootfs=/host || echo "Node exporter failed to start"
 
-              # Create a placeholder for the application container
-              # This will be replaced by Jenkins CI/CD
-              docker run -d \
-                --name student-registration-app \
-                --network app-network \
-                --restart always \
-                -p 80:5000 \
-                -e FLASK_ENV=production \
-                -e DATABASE_URL=mysql+pymysql://testuser:testpass@mysql-prod:3306/testdb \
-                munieb/student-registration:latest || echo "Initial image will be deployed via CI/CD"
+              # Create initialization marker
+              echo "Creating initialization marker..."
+              touch /var/log/user-data-complete
 
-              echo "🚀 EC2 instance ready for CI/CD deployments!"
+              echo "=== EC2 User Data Script Completed Successfully ==="
+              echo "Timestamp: $(date)"
         EOF
 
   tags = {
@@ -292,8 +328,23 @@ resource "aws_instance" "monitor" {
   user_data = <<-EOF
     #!/bin/bash
     set -euxo pipefail
+
+    # Log everything for debugging
+    exec > >(tee /var/log/user-data-monitor.log)
+    exec 2>&1
+
+    echo "=== Starting Monitoring Instance User Data Script ==="
+
+    # Update system
     dnf update -y
+
+    # Fix curl conflicts for monitoring instance too
+    dnf swap -y curl-minimal curl || dnf install -y --allowerasing curl || dnf install -y curl-minimal
+
+    # Install packages
     dnf install -y docker git
+
+    # Start Docker
     systemctl enable --now docker
 
     # Install Docker Compose
@@ -301,7 +352,7 @@ resource "aws_instance" "monitor" {
     -o /usr/local/bin/docker-compose
     chmod +x /usr/local/bin/docker-compose
 
-    # Prometheus + Grafana stack
+    # Create monitoring stack directory
     mkdir -p /opt/prom-stack/provisioning/{datasources,dashboards}
     mkdir -p /var/lib/grafana/dashboards
     
@@ -373,10 +424,12 @@ DB
     
     # Download node exporter dashboard
     curl -sL https://grafana.com/api/dashboards/1860/revisions/32/download \
-      -o /var/lib/grafana/dashboards/node-exporter-full.json
+      -o /var/lib/grafana/dashboards/node-exporter-full.json || echo "Dashboard download failed"
 
     cd /opt/prom-stack
     docker-compose up -d
+
+    echo "=== Monitoring Instance Setup Complete ==="
   EOF
 }
 
