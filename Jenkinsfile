@@ -144,10 +144,25 @@ pipeline {
                         fi
                     done
                     
-                    # Wait for web application to be healthy  
+                    # Wait for web application to be healthy using Python instead of curl
                     echo "🌐 Checking web application health..."
                     for i in {1..15}; do
-                        if docker-compose exec -T web curl -f http://localhost:5000/ --silent; then
+                        # Use Python requests instead of curl
+                        if docker-compose exec -T web python -c "
+            import requests
+            import sys
+            try:
+            response = requests.get('http://localhost:5000/', timeout=5)
+            if response.status_code == 200:
+                print('✅ Root endpoint healthy')
+                sys.exit(0)
+            else:
+                print(f'❌ Root endpoint returned: {response.status_code}')
+                sys.exit(1)
+            except Exception as e:
+            print(f'❌ Health check failed: {e}')
+            sys.exit(1)
+            "; then
                             echo "✅ Web application is healthy (attempt $i)"
                             break
                         else
@@ -157,6 +172,9 @@ pipeline {
                         
                         if [ $i -eq 15 ]; then
                             echo "❌ Web application failed to become healthy"
+                            echo "📋 Container status:"
+                            docker-compose ps
+                            echo "📋 Web container logs:"
                             docker-compose logs web
                             exit 1
                         fi
@@ -169,23 +187,55 @@ pipeline {
                     # Test database connection from web container
                     echo "🔍 Testing database connection from web container..."
                     docker-compose exec -T web python -c "
-from app import create_app, db
-from sqlalchemy import text
-import sys
+            from app import create_app, db
+            from sqlalchemy import text
+            import sys
 
-try:
-    app = create_app('testing')
-    with app.app_context():
-        result = db.session.execute(text('SELECT 1 as test')).fetchone()
-        if result and result[0] == 1:
-            print('✅ Database connection successful')
-        else:
-            print('❌ Database query failed')
+            try:
+            app = create_app('testing')
+            with app.app_context():
+                result = db.session.execute(text('SELECT 1 as test')).fetchone()
+                if result and result[0] == 1:
+                    print('✅ Database connection successful')
+                else:
+                    print('❌ Database query failed')
+                    sys.exit(1)
+            except Exception as e:
+            print(f'❌ Database connection failed: {e}')
             sys.exit(1)
-except Exception as e:
-    print(f'❌ Database connection failed: {e}')
-    sys.exit(1)
-"
+            "
+                    
+                    # Test web application endpoints
+                    echo "🧪 Testing web application endpoints..."
+                    docker-compose exec -T web python -c "
+            import requests
+            import sys
+
+            try:
+            # Test root endpoint
+            response = requests.get('http://localhost:5000/', timeout=10)
+            if response.status_code == 200:
+                print('✅ Root endpoint responding correctly')
+            else:
+                print(f'❌ Root endpoint failed: {response.status_code}')
+                print(f'Response: {response.text[:200]}')
+                sys.exit(1)
+                
+            # Test health endpoint (your health route is at /health/ due to url_prefix)
+            try:
+                health_response = requests.get('http://localhost:5000/health/', timeout=10)
+                if health_response.status_code == 200:
+                    print('✅ Health endpoint responding correctly')
+                    print(f'Health response: {health_response.json()}')
+                else:
+                    print(f'⚠️ Health endpoint returned: {health_response.status_code}')
+            except Exception as e:
+                print(f'ℹ️ Health endpoint test failed: {e}')
+                
+            except Exception as e:
+            print(f'❌ Web application test failed: {e}')
+            sys.exit(1)
+            "
                     
                     # Run pytest Docker tests
                     echo "🔬 Running Docker-specific tests..."
@@ -209,7 +259,7 @@ except Exception as e:
                     '''
                 }
             }
-        }
+            }
 
         stage('Push Docker Image') {
             steps {

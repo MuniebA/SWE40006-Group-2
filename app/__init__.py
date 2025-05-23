@@ -51,10 +51,16 @@ def create_app(config_name='default'):
     @app.route('/')
     def index():
         return render_template('index.html', now=datetime.now())
-    
-    # # Health check endpoint for Docker
-    # @app.route('/health')
-    # def health_check():
-    #     return jsonify({"status": "healthy"}), 200
+
+    # Health check endpoint for Docker (accessible at /health directly)
+    @app.route('/health')
+    def health_check():
+        try:
+            # Test database connection
+            with app.app_context():
+                db.session.execute(db.text('SELECT 1'))
+            return jsonify({"status": "healthy", "database": "connected"}), 200
+        except Exception as e:
+            return jsonify({"status": "unhealthy", "error": str(e)}), 500
 
     return app

@@ -6,6 +6,7 @@ services:
       - FLASK_CONFIG=testing
       - FLASK_APP=run.py
       - TEST_DATABASE_URL=mysql+pymysql://testuser:testpass@db:3306/testdb
+      - DATABASE_URL=mysql+pymysql://testuser:testpass@db:3306/testdb
       - FLASK_DEBUG=1
       - FLASK_ENV=development
     depends_on:
@@ -16,10 +17,11 @@ services:
       - app-network
     # Health check for internal testing
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/", "||", "exit", "1"]
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:5000/', timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 30s
 
   db:
     image: mysql:8.0

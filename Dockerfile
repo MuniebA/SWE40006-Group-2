@@ -31,5 +31,9 @@ USER appuser
 # Expose port
 EXPOSE 5000
 
+# Health check for the container
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD python -c "import requests; requests.get('http://localhost:5000/health', timeout=5)" || exit 1
+
 # Command to run the application
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "run:app"] 
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "run:app"]
