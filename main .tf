@@ -138,11 +138,11 @@ resource "aws_instance" "web" {
   key_name                    = aws_key_pair.generated.key_name
 
   root_block_device {
-    volume_size = 20
+    volume_size = 12 # Increased from 8GB but smaller than 20GB
     volume_type = "gp3"
   }
 
-  # FIXED: Enhanced user_data that properly handles Amazon Linux 2023 package conflicts
+  # WORKING USER_DATA - Based on friend's approach but fixed for your requirements
   user_data = <<-EOF
               #!/bin/bash
               set -euxo pipefail
@@ -154,88 +154,151 @@ resource "aws_instance" "web" {
               echo "=== Starting EC2 User Data Script ==="
               echo "Timestamp: $(date)"
 
-              # Update system first
-              echo "Updating system packages..."
+              # Update system
               yum update -y
 
-              # CRITICAL FIX: Handle curl-minimal conflicts properly for Amazon Linux 2023
-              echo "Fixing curl package conflicts for Amazon Linux 2023..."
-              # Use dnf swap to replace curl-minimal with full curl package
+              # CRITICAL FIX: Handle Amazon Linux 2023 curl conflicts properly
+              echo "Fixing curl package conflicts..."
+              # Method 1: Try dnf swap (safest for AL2023)
               dnf swap -y curl-minimal curl || {
-                echo "curl swap failed, trying alternative approach..."
+                echo "dnf swap failed, trying --allowerasing..."
+                # Method 2: Force replace if swap fails
                 dnf install -y --allowerasing curl || {
-                  echo "curl installation failed, using curl-minimal..."
-                  # If all fails, ensure curl-minimal is available for docker installation
-                  dnf install -y curl-minimal || true
+                  echo "curl installation failed, but continuing with curl-minimal..."
                 }
               }
 
-              # Install core packages without conflicts
-              echo "Installing core packages..."
+              # Install core packages
+              echo "Installing Docker and Git..."
               dnf install -y docker git
 
-              # Verify curl is working
-              echo "Verifying curl installation..."
-              curl --version || {
-                echo "curl not working, but continuing..."
-              }
-
-              # Enable and start Docker
+              # Start Docker service
               echo "Starting Docker service..."
               systemctl enable docker
               systemctl start docker
 
+              # Wait for Docker to be ready
+              echo "Waiting for Docker to be ready..."
+              for i in {1..30}; do
+                if systemctl is-active --quiet docker && docker info >/dev/null 2>&1; then
+                  echo "✅ Docker is ready!"
+                  break
+                fi
+                echo "⏳ Waiting for Docker... attempt $i/30"
+                sleep 5
+              done
+
               # Add ec2-user to docker group
-              echo "Adding ec2-user to docker group..."
               usermod -aG docker ec2-user
 
-              # Install docker-compose with better error handling
+              # Install docker-compose
               echo "Installing docker-compose..."
-              COMPOSE_URL="https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)"
-              curl -L "$COMPOSE_URL" -o /usr/local/bin/docker-compose || {
-                echo "Failed to download docker-compose, trying alternative..."
-                wget -O /usr/local/bin/docker-compose "$COMPOSE_URL" || {
-                  echo "docker-compose installation failed, but continuing..."
+              curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose || {
+                echo "curl failed, trying wget..."
+                wget -O /usr/local/bin/docker-compose "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" || {
+                  echo "docker-compose installation failed!"
+                  exit 1
                 }
               }
               chmod +x /usr/local/bin/docker-compose
 
-              # Wait for Docker to be fully ready
-              echo "Waiting for Docker to be ready..."
-              for i in {1..30}; do
-                if docker info >/dev/null 2>&1; then
-                  echo "Docker is ready!"
-                  break
-                fi
-                echo "Waiting for Docker... attempt $i/30"
-                sleep 5
-              done
+              # Verify docker-compose
+              /usr/local/bin/docker-compose --version
 
-              # Create Docker network for the application
-              echo "Creating Docker network..."
-              docker network create app-network || {
-                echo "Network already exists or creation failed"
+              # Clone your repository (for docker-compose.yml and init.sql)
+              echo "Cloning repository..."
+              cd /home/ec2-user
+              git clone https://github.com/MuniebA/SWE40006-Group-2.git app || {
+                echo "Git clone failed!"
+                exit 1
+              }
+              cd app
+              chown -R ec2-user:ec2-user /home/ec2-user/app
+
+              # Pull the latest Docker image immediately
+              echo "Pulling latest Docker image..."
+              docker pull munieb/student-registration:latest
+
+              # Create production environment file
+              cat > .env << 'ENV_EOF'
+FLASK_APP=run.py
+FLASK_ENV=production
+SECRET_KEY=production-secret-key-change-this
+DATABASE_URL=mysql+pymysql://testuser:testpass@db:3306/testdb
+ENV_EOF
+
+              # Create production docker-compose.yml
+              cat > docker-compose.prod.yml << 'COMPOSE_EOF'
+version: '3.8'
+
+services:
+  web:
+    image: munieb/student-registration:latest
+    ports:
+      - "80:5000"
+    environment:
+      - FLASK_ENV=production
+      - FLASK_CONFIG=production
+      - DATABASE_URL=mysql+pymysql://testuser:testpass@db:3306/testdb
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    networks:
+      - app-network
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  db:
+    image: mysql:8.0
+    environment:
+      - MYSQL_ROOT_PASSWORD=rootpassword
+      - MYSQL_DATABASE=testdb
+      - MYSQL_USER=testuser
+      - MYSQL_PASSWORD=testpass
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - app-network
+    restart: always
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "testuser", "-ptestpass"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+volumes:
+  mysql-data:
+
+networks:
+  app-network:
+    driver: bridge
+COMPOSE_EOF
+
+              # Start containers using production compose
+              echo "Starting production containers..."
+              docker-compose -f docker-compose.prod.yml up -d
+
+              # Wait for services to be ready
+              echo "Waiting for services to start..."
+              sleep 60
+
+              # Initialize database if needed
+              echo "Initializing database..."
+              docker-compose -f docker-compose.prod.yml exec -T web flask db upgrade 2>/dev/null || {
+                echo "Database migration failed or not needed"
               }
 
-              # Start MySQL container for production
-              echo "Starting MySQL container..."
-              docker run -d \
-                --name mysql-prod \
-                --network app-network \
-                --restart always \
-                -e MYSQL_ROOT_PASSWORD=rootpassword \
-                -e MYSQL_DATABASE=testdb \
-                -e MYSQL_USER=testuser \
-                -e MYSQL_PASSWORD=testpass \
-                -v mysql-data:/var/lib/mysql \
-                mysql:8.0 || echo "MySQL container creation failed"
-
-              # Wait for MySQL to initialize
-              echo "Waiting for MySQL to initialize..."
-              sleep 45
-
-              # Install node-exporter for monitoring
-              echo "Starting Node Exporter..."
+              # Start node-exporter for monitoring
+              echo "Starting Node Exporter for monitoring..."
               docker run -d \
                 --name=node-exporter \
                 --restart=always \
@@ -243,13 +306,22 @@ resource "aws_instance" "web" {
                 --pid=host \
                 -v "/:/host:ro,rslave" \
                 quay.io/prometheus/node-exporter:latest \
-                --path.rootfs=/host || echo "Node exporter failed to start"
+                --path.rootfs=/host
 
-              # Create initialization marker
-              echo "Creating initialization marker..."
+              # Create completion marker
+              echo "Creating completion marker..."
               touch /var/log/user-data-complete
 
-              echo "=== EC2 User Data Script Completed Successfully ==="
+              # Final health check
+              echo "Performing final health check..."
+              sleep 30
+              if curl -f http://localhost/ >/dev/null 2>&1; then
+                echo "✅ Application is running successfully!"
+              else
+                echo "⚠️ Application may not be ready yet"
+              fi
+
+              echo "=== User Data Script Completed ==="
               echo "Timestamp: $(date)"
         EOF
 
@@ -315,7 +387,7 @@ resource "aws_instance" "monitor" {
   key_name                    = aws_key_pair.generated.key_name
 
   root_block_device {
-    volume_size = 15
+    volume_size = 10
     volume_type = "gp3"
   }
 
@@ -329,7 +401,7 @@ resource "aws_instance" "monitor" {
     #!/bin/bash
     set -euxo pipefail
 
-    # Log everything for debugging
+    # Log everything
     exec > >(tee /var/log/user-data-monitor.log)
     exec 2>&1
 

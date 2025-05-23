@@ -118,7 +118,7 @@ pipeline {
             steps {
                 sh '''#!/bin/bash
                     echo "🧹 Cleaning up any existing containers..."
-                    docker-compose down -v
+                    docker-compose down -v || true
                     docker container prune -f
                     
                     echo "🚀 Starting Docker Compose services (internal networking only)..."
@@ -147,7 +147,6 @@ pipeline {
                     # Wait for web application using Python one-liner
                     echo "🌐 Checking web application health..."
                     for i in {1..15}; do
-                        # Simple Python health check - single line to avoid indentation issues
                         if docker-compose exec -T web python -c "import urllib.request; response = urllib.request.urlopen('http://localhost:5000/', timeout=5); exit(0 if response.getcode() == 200 else 1)" 2>/dev/null; then
                             echo "✅ Web application is healthy (attempt $i)"
                             break
@@ -186,7 +185,7 @@ pipeline {
                 always {
                     sh '''
                         echo "🧹 Cleaning up Docker containers..."
-                        docker-compose down -v
+                        docker-compose down -v || true
                         docker container prune -f
                     '''
                 }
@@ -338,11 +337,11 @@ print("Terraform installed successfully!")
                     echo "🌐 EC2 Instance IP: $EC2_IP"
                     echo "🔐 SSH Key location: ~/.ssh/ec2-key.pem"
                     
-                    # Wait for EC2 to be fully ready (increased wait time for proper initialization)
-                    echo "⏳ Waiting for EC2 instance to be fully ready..."
-                    sleep 120
+                    # Wait for EC2 to be fully ready (longer wait since app is deploying)
+                    echo "⏳ Waiting for EC2 instance and application to be fully ready..."
+                    sleep 180  # 3 minutes for complete initialization
                     
-                    # Test SSH connection (no sudo needed)
+                    # Test SSH connection
                     echo "🧪 Testing SSH connection..."
                     for i in {1..10}; do
                         if ssh -i ~/.ssh/ec2-key.pem -o StrictHostKeyChecking=no -o ConnectTimeout=15 ec2-user@$EC2_IP "echo 'SSH connection successful!'"; then
@@ -357,7 +356,7 @@ print("Terraform installed successfully!")
             }
         }
         
-        stage('Wait for Infrastructure Initialization') {
+        stage('Wait for Application Deployment') {
             steps {
                 sh '''#!/bin/bash
                     # Use local Terraform installation
@@ -366,22 +365,22 @@ print("Terraform installed successfully!")
                     # Get EC2 instance IP
                     EC2_IP=$(terraform output -raw ec2_public_ip)
                     
-                    echo "🔍 Waiting for infrastructure initialization to complete..."
+                    echo "🔍 Waiting for application deployment to complete..."
                     echo "📍 Monitoring EC2 instance: $EC2_IP"
                     
                     # Wait for user_data script to complete
                     echo "⏳ Waiting for user_data initialization..."
-                    for i in {1..20}; do
+                    for i in {1..25}; do
                         if ssh -i ~/.ssh/ec2-key.pem -o StrictHostKeyChecking=no -o ConnectTimeout=15 ec2-user@$EC2_IP "test -f /var/log/user-data-complete"; then
                             echo "✅ Infrastructure initialization completed!"
                             break
                         else
-                            echo "⏳ Waiting for initialization... attempt $i/20 (waiting 30 seconds)"
+                            echo "⏳ Waiting for initialization... attempt $i/25 (waiting 30 seconds)"
                             sleep 30
                         fi
                         
-                        if [ $i -eq 20 ]; then
-                            echo "⚠️ Initialization timeout - proceeding anyway"
+                        if [ $i -eq 25 ]; then
+                            echo "⚠️ Initialization timeout - checking status"
                             # Show initialization status
                             ssh -i ~/.ssh/ec2-key.pem -o StrictHostKeyChecking=no ec2-user@$EC2_IP "
                                 echo '=== Infrastructure Status ==='
@@ -393,19 +392,19 @@ print("Terraform installed successfully!")
                         fi
                     done
                     
-                    # Verify Docker is running
-                    echo "🐳 Verifying Docker installation..."
+                    # Verify application is running
+                    echo "🌐 Verifying application deployment..."
                     ssh -i ~/.ssh/ec2-key.pem -o StrictHostKeyChecking=no ec2-user@$EC2_IP "
-                        echo 'Checking Docker status...'
-                        sudo systemctl status docker --no-pager -l || echo 'Docker status check failed'
-                        docker --version || echo 'Docker version check failed'
-                        docker info || echo 'Docker info failed'
+                        echo 'Checking application status...'
+                        docker ps
+                        echo 'Testing local application...'
+                        curl -I http://localhost/ || echo 'Local application test failed'
                     "
                 '''
             }
         }
         
-        stage('Deploy Application to EC2') {
+        stage('Update Running Application') {
             steps {
                 sh '''#!/bin/bash
                     # Use local Terraform installation
@@ -414,233 +413,105 @@ print("Terraform installed successfully!")
                     # Get EC2 instance IP
                     EC2_IP=$(terraform output -raw ec2_public_ip)
                     
-                    if [ -z "$EC2_IP" ]; then
-                        echo "❌ No EC2 instance IP found!"
-                        exit 1
-                    fi
-                    
-                    echo "🎯 Deploying to EC2 instance: $EC2_IP"
+                    echo "🔄 Updating running application with new image..."
                     echo "📦 New Docker image: $DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG"
                     
-                    # Create simplified deployment script (no Docker installation)
-                    cat > simple_deploy.sh << 'EOF'
+                    # Create update script
+                    cat > update_app.sh << 'EOF'
 #!/bin/bash
 set -e
 
-DOCKER_IMAGE="$1"
-CONTAINER_NAME="student-registration-app"
+NEW_IMAGE="$1"
+echo "🔄 Updating application to: $NEW_IMAGE"
 
-echo "🚀 Starting deployment of $DOCKER_IMAGE"
-
-# Check if Docker is available
-if ! command -v docker &> /dev/null; then
-    echo "❌ Docker is not installed! This should have been handled by Terraform."
-    exit 1
-fi
-
-# Check if Docker service is running
-if ! sudo systemctl is-active --quiet docker; then
-    echo "🔄 Starting Docker service..."
-    sudo systemctl start docker
-    sleep 10
-fi
-
-# Verify Docker is working
-if ! sudo docker info >/dev/null 2>&1; then
-    echo "❌ Docker is not working properly!"
-    sudo systemctl status docker --no-pager
-    exit 1
-fi
-
-echo "✅ Docker is available and running"
-
-# Determine if we need sudo for Docker commands
-if docker ps >/dev/null 2>&1; then
-    USE_SUDO=""
-    echo "ℹ️ Using Docker without sudo"
-else
-    USE_SUDO="sudo"
-    echo "ℹ️ Using Docker with sudo"
-fi
-
-# Create network if it doesn't exist
-echo "🌐 Ensuring Docker network exists..."
-$USE_SUDO docker network create app-network 2>/dev/null || echo "Network already exists"
-
-# Check if MySQL container exists and is running
-echo "🗄️ Checking MySQL container..."
-if ! $USE_SUDO docker ps --format 'table {{.Names}}' | grep -q mysql-prod; then
-    if $USE_SUDO docker ps -a --format 'table {{.Names}}' | grep -q mysql-prod; then
-        echo "🔄 Starting existing MySQL container..."
-        $USE_SUDO docker start mysql-prod
-    else
-        echo "🗄️ Creating MySQL production container..."
-        $USE_SUDO docker run -d \
-            --name mysql-prod \
-            --network app-network \
-            --restart always \
-            -e MYSQL_ROOT_PASSWORD=rootpassword \
-            -e MYSQL_DATABASE=testdb \
-            -e MYSQL_USER=testuser \
-            -e MYSQL_PASSWORD=testpass \
-            -v mysql-data:/var/lib/mysql \
-            mysql:8.0
-    fi
-    
-    # Wait for MySQL to be ready
-    echo "⏳ Waiting for MySQL to be ready..."
-    sleep 45
-    
-    # Test MySQL connection
-    for i in {1..10}; do
-        if $USE_SUDO docker exec mysql-prod mysqladmin ping -u testuser -ptestpass --silent 2>/dev/null; then
-            echo "✅ MySQL is ready!"
-            break
-        fi
-        echo "⏳ MySQL not ready yet, waiting... ($i/10)"
-        sleep 10
-    done
-fi
-
-# Get current running image for rollback
-CURRENT_IMAGE=$($USE_SUDO docker ps --filter "name=$CONTAINER_NAME" --format "table {{.Image}}" | tail -n +2 | head -1)
-echo "📋 Current image: $CURRENT_IMAGE"
+# Navigate to app directory
+cd /home/ec2-user/app
 
 # Pull new image
 echo "⬇️ Pulling new image..."
-$USE_SUDO docker pull $DOCKER_IMAGE
+docker pull $NEW_IMAGE
 
-# Stop and remove old container
-echo "🛑 Stopping old container..."
-$USE_SUDO docker stop $CONTAINER_NAME 2>/dev/null || true
-$USE_SUDO docker rm $CONTAINER_NAME 2>/dev/null || true
+# Update the docker-compose file to use new image
+sed -i "s|image: munieb/student-registration:.*|image: $NEW_IMAGE|g" docker-compose.prod.yml
 
-# Start new container
-echo "🔄 Starting new container..."
-$USE_SUDO docker run -d \
-    --name $CONTAINER_NAME \
-    --network app-network \
-    --restart always \
-    -p 80:5000 \
-    -e FLASK_ENV=production \
-    -e DATABASE_URL=mysql+pymysql://testuser:testpass@mysql-prod:3306/testdb \
-    $DOCKER_IMAGE
+# Recreate the web container with new image
+echo "🔄 Updating web container..."
+docker-compose -f docker-compose.prod.yml up -d --force-recreate web
 
-# Wait for container to start
-echo "⏳ Waiting for application to start..."
+# Wait for container to be ready
+echo "⏳ Waiting for container to be ready..."
 sleep 30
 
 # Health check
 echo "🏥 Performing health check..."
-for i in {1..15}; do
-    HEALTH_CHECK=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/ 2>/dev/null || echo "000")
-    if [ "$HEALTH_CHECK" = "200" ]; then
-        echo "✅ Health check passed! Deployment successful."
-        echo "🌐 Application is running at http://localhost/"
-        echo "🗑️ Cleaning up old images..."
-        $USE_SUDO docker image prune -f
+for i in {1..10}; do
+    if curl -f http://localhost/ >/dev/null 2>&1; then
+        echo "✅ Application update successful!"
+        # Clean up old images
+        docker image prune -f
         exit 0
-    else
-        echo "⚠️ Health check attempt $i/15 failed - Status: $HEALTH_CHECK"
-        sleep 10
     fi
+    echo "⏳ Health check attempt $i/10..."
+    sleep 10
 done
 
-echo "❌ Health check failed! Rolling back..."
-
-# Stop failed container
-$USE_SUDO docker stop $CONTAINER_NAME 2>/dev/null || true
-$USE_SUDO docker rm $CONTAINER_NAME 2>/dev/null || true
-
-# Rollback to previous image
-if [ -n "$CURRENT_IMAGE" ] && [ "$CURRENT_IMAGE" != "REPOSITORY" ] && [ "$CURRENT_IMAGE" != "$DOCKER_IMAGE" ]; then
-    echo "🔄 Rolling back to: $CURRENT_IMAGE"
-    $USE_SUDO docker run -d \
-        --name $CONTAINER_NAME \
-        --network app-network \
-        --restart always \
-        -p 80:5000 \
-        -e FLASK_ENV=production \
-        -e DATABASE_URL=mysql+pymysql://testuser:testpass@mysql-prod:3306/testdb \
-        $CURRENT_IMAGE
-    echo "🔙 Rollback completed!"
-else
-    echo "⚠️ No previous image available for rollback!"
-fi
+echo "⚠️ Health check failed after update"
 exit 1
 EOF
 
-                    # Copy deployment script to EC2
-                    echo "📤 Copying deployment script to EC2..."
-                    scp -i ~/.ssh/ec2-key.pem -o StrictHostKeyChecking=no simple_deploy.sh ec2-user@$EC2_IP:/tmp/
+                    # Copy and execute update script
+                    echo "📤 Copying update script to EC2..."
+                    scp -i ~/.ssh/ec2-key.pem -o StrictHostKeyChecking=no update_app.sh ec2-user@$EC2_IP:/tmp/
                     
-                    # Execute deployment
-                    echo "🚀 Executing deployment on EC2..."
+                    echo "🚀 Executing application update..."
                     ssh -i ~/.ssh/ec2-key.pem -o StrictHostKeyChecking=no ec2-user@$EC2_IP \
-                        "chmod +x /tmp/simple_deploy.sh && /tmp/simple_deploy.sh $DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG"
+                        "chmod +x /tmp/update_app.sh && /tmp/update_app.sh $DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG"
                     
-                    echo "🎉 Deployment completed successfully!"
-                    echo "🌐 Application URL: http://$EC2_IP/"
+                    echo "🎉 Application update completed successfully!"
                 '''
             }
         }
 
-        stage('Post-Deployment Verification') {
+        stage('Final Verification') {
             steps {
                 sh '''#!/bin/bash
                     # Use local Terraform installation
                     export PATH=${WORKSPACE}/terraform:$PATH
                     
-                    # Get EC2 instance IP
+                    # Get EC2 instance IP and monitoring IP
                     EC2_IP=$(terraform output -raw ec2_public_ip)
+                    MONITOR_IP=$(terraform output -raw prometheus_url | sed 's|http://||' | sed 's|:9090||' || echo "Unknown")
                     
                     # Perform comprehensive health check
-                    echo "🔍 Performing post-deployment verification..."
+                    echo "🔍 Performing final verification..."
                     
                     # Check if application is responding
-                    for i in {1..10}; do
+                    for i in {1..5}; do
                         RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" http://$EC2_IP/ 2>/dev/null || echo "000")
                         if [ "$RESPONSE" = "200" ]; then
                             echo "✅ Application is responding correctly (attempt $i)"
                             
-                            # Additional verification
-                            echo "🔍 Additional verification checks..."
-                            
-                            # Check container status
-                            ssh -i ~/.ssh/ec2-key.pem -o StrictHostKeyChecking=no ec2-user@$EC2_IP "
-                                echo '=== Container Status ==='
-                                sudo docker ps -f name=student-registration-app
-                                echo '=== Application Logs (last 10 lines) ==='
-                                sudo docker logs --tail 10 student-registration-app
-                            "
+                            # Check monitoring endpoints
+                            echo "🔍 Checking monitoring endpoints..."
+                            curl -s -o /dev/null -w "📊 Grafana (%{http_code}): http://$MONITOR_IP:3000\n" http://$MONITOR_IP:3000/ || true
+                            curl -s -o /dev/null -w "📈 Prometheus (%{http_code}): http://$MONITOR_IP:9090\n" http://$MONITOR_IP:9090/ || true
                             
                             break
                         else
-                            echo "⚠️ Health check failed (attempt $i/10) - Status: $RESPONSE"
-                            if [ $i -eq 10 ]; then
+                            echo "⚠️ Health check failed (attempt $i/5) - Status: $RESPONSE"
+                            if [ $i -eq 5 ]; then
                                 echo "❌ Final health check failed!"
-                                
-                                # Debug information
-                                ssh -i ~/.ssh/ec2-key.pem -o StrictHostKeyChecking=no ec2-user@$EC2_IP "
-                                    echo '=== Debugging Information ==='
-                                    echo 'Container Status:'
-                                    sudo docker ps -a
-                                    echo 'Application Logs:'
-                                    sudo docker logs student-registration-app || echo 'No container logs available'
-                                    echo 'System Services:'
-                                    sudo systemctl status docker --no-pager
-                                    echo 'Port 80 Status:'
-                                    sudo netstat -tulpn | grep :80 || echo 'Nothing listening on port 80'
-                                "
                                 exit 1
                             fi
                             sleep 15
                         fi
                     done
                     
-                    echo "🎯 Final deployment verification complete!"
+                    echo "🎯 Final verification complete!"
                     echo "📊 Application Status: HEALTHY"
-                    echo "🌐 Access your application at: http://$EC2_IP/"
+                    echo "🌐 Application URL: http://$EC2_IP/"
+                    echo "📊 Grafana URL: http://$MONITOR_IP:3000 (admin/admin)"
+                    echo "📈 Prometheus URL: http://$MONITOR_IP:9090"
                 '''
             }
         }
@@ -665,16 +536,16 @@ EOF
                 # Use local Terraform installation
                 export PATH=${WORKSPACE}/terraform:$PATH
                 
-                # Get instance IP for final message
+                # Get instance IPs for final message
                 EC2_IP=$(terraform output -raw ec2_public_ip || echo "Unknown")
-                GRAFANA_IP=$(terraform output -raw prometheus_url | sed 's|http://||' | sed 's|:9090||' || echo "Unknown")
+                MONITOR_IP=$(terraform output -raw prometheus_url | sed 's|http://||' | sed 's|:9090||' || echo "Unknown")
                 
                 echo "════════════════════════════════════════════════════════"
                 echo "🎉 DEPLOYMENT SUCCESSFUL!"
                 echo "📦 Docker Image: $DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG"
                 echo "🌐 Application URL: http://$EC2_IP/"
-                echo "📊 Grafana URL: http://$GRAFANA_IP:3000 (admin/admin)"
-                echo "📈 Prometheus URL: http://$GRAFANA_IP:9090"
+                echo "📊 Grafana URL: http://$MONITOR_IP:3000 (admin/admin)"
+                echo "📈 Prometheus URL: http://$MONITOR_IP:9090"
                 echo "⏰ Deployment completed at: $(date)"
                 echo "════════════════════════════════════════════════════════"
             '''
